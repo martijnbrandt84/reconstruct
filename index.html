@@ -240,14 +240,14 @@
           <dt>Tussentijd</dt><dd>Mediane tijd tussen twee opeenvolgende posts binnen een actieve periode.</dd>
           <dt>Langste stilte</dt><dd>Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee.</dd>
           <dt>Woorden</dt><dd>Kop en tekst samen. Kort &lt; 40, middel 40–150, lang &gt; 150.</dd>
-          <dt>Link</dt><dd>Minstens één link naar een artikel. Social, grafiekdiensten, bestanden en eigen embeds tellen niet mee. Premium als een gelinkt artikel achter de betaalmuur staat.</dd>
+          <dt>Link</dt><dd>Minstens één link naar een artikel. Social, grafiekdiensten, bestanden en eigen embeds tellen niet mee. Links naar de eigen site (zelfde domein als de liveblog) zijn eigen artikelen, gratis of premium; links naar andere sites zijn uitgaand. In grafieken krijgt elke post één soort: eigen premium gaat voor eigen gratis, eigen gratis voor uitgaand.</dd>
         </dl>
 
         <div class="sub-head"><h3>Media</h3></div>
         <p>Elke post valt in één rubriek, in deze volgorde: video, datavisualisatie, social embed, foto, geen media.</p>
         <dl>
           <dt>Video</dt><dd>Eigen videospeler of ingesloten video van de site.</dd>
-          <dt>Datavisualisatie</dt><dd>Embeds van Datawrapper, Flourish, Infogram, LocalFocus, AP-uitslagen en andere grafiekdiensten, plus eigen widgets van de site (bv. AD-kaarten, HLN-prognosetool).</dd>
+          <dt>Datavisualisatie</dt><dd>Embeds van Datawrapper, Flourish, Infogram, LocalFocus, AP-uitslagen en andere grafiekdiensten, plus eigen widgets van de site (bv. AD-kaarten, HLN-prognosetool). Bij DPG-titels telt ook een afbeelding in PNG-formaat mee: persfoto's zijn JPEG, grafieken en graphics PNG.</dd>
           <dt>Social embed</dt><dd>X, Instagram, YouTube, TikTok, Facebook, Bluesky, Threads, LinkedIn, Truth Social.</dd>
           <dt>Foto</dt><dd>Minstens één afbeelding in de post. Auteursfoto's, logo's en iconen tellen niet mee.</dd>
         </dl>
@@ -309,7 +309,7 @@
         <select id="chartColorBy">
           <option value="auto">automatisch</option>
           <option value="title">per titel</option>
-          <option value="links">link / premium-link</option>
+          <option value="links">eigen / premium / uitgaande link</option>
           <option value="media">foto / video / social embed</option>
         </select>
       </label>
@@ -378,6 +378,6 @@
 
 <script src="logos.js?v=20261116b"></script>
 <script src="favicons.js?v=20261117a"></script>
-<script src="app.js?v=20261119k"></script>
+<script src="app.js?v=20261119m"></script>
 </body>
 </html>

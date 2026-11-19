@@ -293,6 +293,24 @@ const socialOf = (r) => {
 const isLinkPremiumRow = (r) => !!state.mapping.linkPremium && !NEGATIVE.test(String(r[state.mapping.linkPremium] ?? '').trim());
 const isDatavizRow = (r) => !!state.mapping.dataviz && !NEGATIVE.test(String(r[state.mapping.dataviz] ?? '').trim());
 
+/** Links van een post: naar de eigen site (zelfde domein als de liveblog) of uitgaand. Zonder liveblog-URL tellen alle links als eigen.
+ *  cls is één rubriek per post: eigen premium gaat voor eigen gratis, eigen gratis voor uitgaand. */
+function linkInfo(r) {
+  const m = state.mapping;
+  if (!m.link) return { cls: '', own: false, external: false };
+  const links = m.link === 'artikel_link' ? rowLinks(r) : [String(r[m.link] ?? '').trim()].filter(isHttpUrl);
+  if (!links.length) return { cls: '', own: false, external: false };
+  const siteOf = (u) => hostFromUrl(u).toLowerCase().split('.').slice(-2).join('.');
+  const ownSite = m.articleUrl && isHttpUrl(r[m.articleUrl]) ? siteOf(r[m.articleUrl]) : '';
+  const own = ownSite ? links.filter(u => siteOf(u) === ownSite) : links;
+  const external = links.length > own.length;
+  if (!own.length) return { cls: 'external', own: false, external };
+  // premiumlabel van de post geldt voor de eigen links, tenzij juist een uitgaande link als premium bekend is
+  const premium = own.some(u => linkMeta[u]?.premium === true)
+    || (isLinkPremiumRow(r) && !links.some(u => !own.includes(u) && linkMeta[u]?.premium === true));
+  return { cls: premium ? 'premium' : 'own', own: true, external };
+}
+
 /* ---------- ritme en lengte: frequentie, regelmaat en lengte als objectieve maten ---------- */
 // langer dan dit zonder post telt als pauze (nacht, onderbreking), niet als actieve tijd
 const PAUSE_MIN = 120;
@@ -2002,6 +2020,7 @@ async function fetchDpgRegioItems(info) {
         freeHtml: comps.filter(c => c.type === 'FREE_HTML').map(c => c.properties?.content || '').join(' '),
         image: comps.find(c => c.type === 'IMAGE' && isHttpUrl(c.properties?.url))?.properties.url || '',
         video: comps.some(c => c.type === 'VIDEO'),
+        pngImage: comps.some(c => c.type === 'IMAGE' && /png/i.test(c.properties?.mimeType || '')),
         teaser: teaserFromBlocks(comps.filter(c => !['PARAGRAPH', 'IMAGE', 'VIDEO', 'FREE_HTML'].includes(c.type)), info.canonical),
         types: comps.map(c => c.type)
       });
@@ -2049,6 +2068,7 @@ async function fetchDpgMomentItems(info) {
         extraHtml: blocks.filter(b => b.blockType !== 'PARAGRAPH').map(b => JSON.stringify(b)).join(' '),
         image: dpgImageUrl(imageBlock, info.origin),
         video: blocks.some(b => /VIDEO/i.test(b.blockType || '')),
+        pngImage: blocks.some(b => b.blockType === 'IMAGE' && /"mimeType"\s*:\s*"image\/png"/i.test(JSON.stringify(b))),
         teaser: teaserFromBlocks(blocks.filter(b => !['PARAGRAPH', 'IMAGE'].includes(b.blockType)), info.canonical),
         types: blocks.map(b => b.blockType)
       });
@@ -2080,6 +2100,8 @@ async function fetchDpgLiveblogRows(info, doc) {
       try { const x = new URL(u, 'https://x'); return siteOf(x.hostname) === ownSite && !/linkblok|\.css$|\/specials\/embeds\//i.test(x.pathname); } catch { return false; }
     });
     if (ownWidget && !media.video && !media.social.length) media.dataviz = true;
+    // persfoto's zijn JPEG; een PNG is een grafiek of graphic (bv. ANP-grafiek als afbeelding)
+    if (it.pngImage && !media.video && !media.social.length) media.dataviz = true;
     // links in linkblokken (FREE_HTML) tellen ook mee
     const textLinks = articleLinksFromContent(`${it.paragraphs.join(' ')} ${it.freeHtml || ''}`, info.canonical);
     // de teaser in de post zegt zelf of het artikel premium is
@@ -3937,13 +3959,14 @@ const EXPLAIN = {
   longShare: 'Aandeel posts langer dan 150 woorden',
   image: MEDIA_EXPLAIN, video: MEDIA_EXPLAIN, social: MEDIA_EXPLAIN, dataviz: MEDIA_EXPLAIN, noMedia: MEDIA_EXPLAIN,
   media: 'Aandeel posts met foto, video, social embed of datavisualisatie',
-  link: 'Aandeel posts met minstens één link naar een artikel',
-  premium: 'Aandeel posts met een link naar een premium-artikel',
+  link: 'Aandeel posts met minstens één link naar een eigen artikel (gratis of premium)',
+  premium: 'Aandeel posts met een link naar een eigen premium-artikel',
+  external: 'Aandeel posts met minstens één link naar een andere site',
   reachViews: 'Weergaven van de liveblog, opgeteld over de uren',
   reachUsers: 'Gebruikers per uur, opgeteld; geen unieke gebruikers',
   reachVpu: 'Weergaven gedeeld door gebruikers',
   viewsPerPost: 'Weergaven gedeeld door het aantal posts',
-  'stack-links': 'Posts met en zonder link; links naar premium-artikelen apart',
+  'stack-links': 'Eigen premium-artikel, eigen gratis artikel of uitgaande link; per post de eerste die van toepassing is',
   'stack-media': MEDIA_EXPLAIN,
   'stack-length': 'Kort: minder dan 40 woorden · middel: 40–150 · lang: meer dan 150',
   __views: 'Weergaven van de liveblog per uur',
@@ -4136,11 +4159,11 @@ function renderChart() {
   const brandColor = (name, i) => state.brands[name]?.color || PALETTE[i % PALETTE.length];
   const mkSeries = (name, color, extra = {}) => ({ name, color, counts: new Array(hours.length).fill(0), total: 0, ...extra });
   // vaste, goed onderscheidbare kleuren; 'zonder' is altijd neutraal grijs
-  const hasLink = (r) => !!m.link && isHttpUrl(r[m.link]);
   const SPLITS = {
     links: [
-      mkSeries('Met premium-link', CAT.premium, { test: it => hasLink(it.row) && isLinkPremiumRow(it.row) }),
-      mkSeries('Met link', CAT.link, { test: it => hasLink(it.row) }),
+      mkSeries('Eigen premium-artikel', CAT.premium, { test: it => linkInfo(it.row).cls === 'premium' }),
+      mkSeries('Eigen artikel', CAT.link, { test: it => linkInfo(it.row).cls === 'own' }),
+      mkSeries('Uitgaande link', CAT.external, { test: it => linkInfo(it.row).cls === 'external' }),
       mkSeries('Zonder link', CAT.none, { test: () => true })
     ],
     // \u00e9\u00e9n categorie per update, in deze volgorde: video gaat voor social, social voor foto
@@ -4496,9 +4519,11 @@ function buildCard(item, geo, ctx) {
   const bodyText = s.showBody && m.body ? clipText(String(r[m.body] ?? '').trim(), 450) : '';
   const linkedUrl = m.link ? String(r[m.link] ?? '').trim() : '';
   const hasLink = isHttpUrl(linkedUrl);
-  const premiumLink = hasLink && isLinkPremiumRow(r);
+  const linkKind = hasLink ? linkInfo(r).cls : '';
+  const premiumLink = linkKind === 'premium';
+  const linkTip = premiumLink ? 'Eigen premium-artikel' : linkKind === 'external' ? 'Uitgaande link' : 'Eigen artikel';
   const linkChip = hasLink
-    ? `<a class="link-chip${premiumLink ? ' premium-link' : ''}" href="${escAttr(linkedUrl)}" target="_blank" rel="noopener noreferrer" title="${premiumLink ? 'Premium-artikel' : 'Gelinkt artikel'}: ${escAttr(linkedUrl)}"><i data-lucide="link"></i>${premiumLink ? '<i data-lucide="lock"></i>' : ''}</a>`
+    ? `<a class="link-chip${premiumLink ? ' premium-link' : ''}" href="${escAttr(linkedUrl)}" target="_blank" rel="noopener noreferrer" title="${linkTip}: ${escAttr(linkedUrl)}"><i data-lucide="${linkKind === 'external' ? 'external-link' : 'link'}"></i>${premiumLink ? '<i data-lucide="lock"></i>' : ''}</a>`
     : '';
   const social = socialOf(r);
   const mediaChips = (isVideoRow(r) ? '<span class="link-chip media-chip" title="Bevat video"><i data-lucide="play"></i></span>' : '')
@@ -5054,13 +5079,14 @@ function exportCsv() {
       timeInputLabel(it.minutes), m.title ? r[m.title] : '', m.body ? r[m.body] || '' : '',
       words, lengthClass(words), mediaCategory(r, m.image) || 'geen',
       m.image && isHttpUrl(r[m.image]) ? r[m.image] : '', isVideoRow(r) ? 'ja' : '', socialOf(r), isDatavizRow(r) ? 'ja' : '',
-      links.length, links.join(' '), isLinkPremiumRow(r) ? 'ja' : '', m.premium && isPremium(r[m.premium]) ? 'ja' : '',
+      links.length, links.join(' '), { premium: 'eigen premium', own: 'eigen', external: 'uitgaand' }[linkInfo(r).cls] || '',
+      isLinkPremiumRow(r) ? 'ja' : '', m.premium && isPremium(r[m.premium]) ? 'ja' : '',
       prev === undefined ? null : it.minutes - prev, r.blokken || '', r.embed_bronnen || '',
       ...metrics.map(mt => parseNumber(r[mt.column]))
     ];
   });
   downloadCsv('posts', ['Titel', 'Liveblog', 'Liveblog-URL', 'Postnummer', 'Tijd', 'Kop', 'Tekst', 'Woorden', 'Lengte', 'Media',
-    'Foto-URL', 'Video', 'Social', 'Datavisualisatie', 'Aantal links', 'Links', 'Link naar premium', 'Premium',
+    'Foto-URL', 'Video', 'Social', 'Datavisualisatie', 'Aantal links', 'Links', 'Soort link', 'Link naar premium', 'Premium',
     'Minuten sinds vorige', 'Blokken', 'Embed-bronnen', ...metrics.map(mt => mt.label || mt.column)], rows);
 }
 
@@ -5217,7 +5243,7 @@ function renderTable() {
     const rows = list.map(it => it.row);
     const times = list.map(it => it.minutes).sort((a, b) => a - b);
     const gaps = times.slice(1).map((t, i) => t - times[i]);
-    const links = rows.filter(r => m.link && isHttpUrl(r[m.link]));
+    const links = rows.map(linkInfo);
     const words = rows.map(postWords);
     const lengths = words.map(lengthClass);
     const { activeMinutes, gaps: sessionGaps } = rhythmOf(times);
@@ -5232,7 +5258,7 @@ function renderTable() {
     // elke post precies één mediarubriek, zodat foto + video + social + geen samen 100% is
     const cats = rows.map(r => mediaCategory(r, m.image));
     const share = (cat) => pct(cats.filter(c => c === cat).length, rows.length);
-    const premiumPosts = links.filter(isLinkPremiumRow).length;
+    const linkCount = (cls) => links.filter(l => l.cls === cls).length;
     return {
       n: rows.length,
       first: times[0],
@@ -5251,17 +5277,19 @@ function renderTable() {
         lang: lengths.filter(l => l === 'lang').length
       },
       image: m.image ? share('foto') : null,
-      link: m.link ? pct(links.length, rows.length) : null,
-      premium: m.link && m.linkPremium ? pct(premiumPosts, rows.length) : null,
+      link: m.link ? pct(links.filter(l => l.own).length, rows.length) : null,
+      premium: m.link && m.linkPremium ? pct(linkCount('premium'), rows.length) : null,
+      external: m.link ? pct(links.filter(l => l.external).length, rows.length) : null,
       video: m.video ? share('video') : null,
       social: m.social ? share('social') : null,
       dataviz: m.dataviz ? share('dataviz') : null,
       noMedia: m.image || m.video || m.social || m.dataviz ? share('') : null,
       media: m.image || m.video || m.social || m.dataviz ? 1 - share('') : null,
       stackLinks: {
-        premium: premiumPosts,
-        link: links.length - premiumPosts,
-        none: rows.length - links.length
+        premium: linkCount('premium'),
+        own: linkCount('own'),
+        external: linkCount('external'),
+        none: linkCount('')
       },
       stackMedia: {
         video: cats.filter(c => c === 'video').length,
@@ -5301,8 +5329,9 @@ function renderTable() {
     { key: 'dataviz', label: 'Met datavisualisatie', fmt: fmtPct, better: 'high' },
     { key: 'noMedia', label: 'Geen media', fmt: fmtPct, better: null },
     { key: 'media', label: 'Met media', fmt: fmtPct, better: 'high' },
-    { key: 'link', label: 'Met link', fmt: fmtPct, better: 'high' },
-    { key: 'premium', label: 'Met premium-link', fmt: fmtPct, better: null }
+    { key: 'link', label: 'Met eigen link', fmt: fmtPct, better: 'high' },
+    { key: 'premium', label: 'Met premium-link', fmt: fmtPct, better: null },
+    { key: 'external', label: 'Met uitgaande link', fmt: fmtPct, better: null }
   ];
   // cijfers per titel: totaal, gemiddelde en mediaan per artikel
   state.metrics.filter(mt => mt.column).forEach(mt => {
@@ -5369,7 +5398,7 @@ function renderTable() {
     'stack-links': {
       label: 'Links',
       key: 'stackLinks',
-      parts: [['premium', 'Premium-link', CAT.premium], ['link', 'Link', CAT.link], ['none', 'Zonder link', CAT.none]]
+      parts: [['premium', 'Eigen premium-artikel', CAT.premium], ['own', 'Eigen artikel', CAT.link], ['external', 'Uitgaande link', CAT.external], ['none', 'Zonder link', CAT.none]]
     },
     'stack-media': {
       label: 'Media',
@@ -5387,7 +5416,8 @@ function renderTable() {
     n: 'Posts', perHour: 'Frequentie (posts per actief uur)', regularity: 'Regelmaat (0\u2013100)', medianGap: 'Tussentijd (mediaan)',
     maxGap: 'Langste stilte', medianWords: 'Woorden per post (mediaan)', shortShare: 'Aandeel korte posts', longShare: 'Aandeel lange posts',
     image: 'Aandeel met foto', video: 'Aandeel met video', social: 'Aandeel met social embed', dataviz: 'Aandeel met datavisualisatie',
-    noMedia: 'Aandeel zonder media', media: 'Aandeel met media', link: 'Aandeel met link', premium: 'Aandeel met premium-link',
+    noMedia: 'Aandeel zonder media', media: 'Aandeel met media', link: 'Aandeel met eigen link', premium: 'Aandeel met premium-link',
+    external: 'Aandeel met uitgaande link',
     reachViews: 'Weergaven', reachUsers: 'Gebruikers', reachVpu: 'Weergaven per gebruiker', viewsPerPost: 'Weergaven per update'
   };
   const chartTitleOf = (c) => CHART_TITLES[c.key] || c.chartTitle;
@@ -5438,7 +5468,7 @@ function renderTable() {
   const TABLE_HEAD = {
     n: 'Posts', perHour: 'Frequentie', regularity: 'Regelmaat', medianGap: 'Tussentijd', maxGap: 'Langste stilte',
     medianWords: 'Woorden', image: 'Foto', video: 'Video', social: 'Social', dataviz: 'Visualisatie',
-    link: 'Link', premium: 'Premium-link'
+    link: 'Eigen link', premium: 'Premium-link', external: 'Uitgaand'
   };
   const headOf = (c) => {
     const metric = c.key.match(/^m_(.+)_(sum|avg|med)$/);
@@ -5475,7 +5505,7 @@ function renderTable() {
 const M3_SERIES = ['#6750A4', '#7D5260', '#625B71', '#B69DF8', '#E8A6B9', '#A8A0BC', '#4F378B', '#633B4B'];
 // één vaste kleur per categorie, in elke grafiek dezelfde; 'geen' is M3 outline-variant
 const CAT = {
-  premium: '#8C5000', link: '#6750A4', none: '#CAC4D0',
+  premium: '#8C5000', link: '#6750A4', external: '#006A6A', none: '#CAC4D0',
   video: '#B3261E', dataviz: '#C26100', social: '#0B57D0', photo: '#146C2E',
   kort: '#B69DF8', middel: '#6750A4', lang: '#21005D'
 };

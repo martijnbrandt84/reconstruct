@@ -1,6 +1,7 @@
 // Leest de liveblog in het actieve tabblad en geeft die door aan het Reconstruct-tabblad.
-const APP_URL = 'http://localhost:8777/index.html';
-const APP_PATTERNS = ['http://localhost:8777/*', 'http://127.0.0.1:8777/*'];
+const APP_URL = 'https://news-reconstruct.vercel.app/';
+// een al open tabblad wint, ook de lokale versie
+const APP_PATTERNS = ['https://news-reconstruct.vercel.app/*', 'http://localhost:8777/*', 'http://127.0.0.1:8777/*'];
 
 function badge(text, color) {
   chrome.action.setBadgeText({ text });
@@ -9,7 +10,12 @@ function badge(text, color) {
 }
 
 async function openApp() {
-  const [existing] = await chrome.tabs.query({ url: APP_PATTERNS });
+  // online versie eerst; een open lokaal tabblad alleen als er geen online tabblad is
+  let existing = null;
+  for (const pattern of APP_PATTERNS) {
+    [existing] = await chrome.tabs.query({ url: pattern });
+    if (existing) break;
+  }
   if (existing) {
     await chrome.tabs.update(existing.id, { active: true });
     await chrome.windows.update(existing.windowId, { focused: true });
@@ -21,6 +27,7 @@ async function openApp() {
 // wacht tot de app geladen is en de importfunctie beschikbaar is
 async function waitForApp(tabId, timeoutMs = 15000) {
   const until = Date.now() + timeoutMs;
+  let lastError = '';
   while (Date.now() < until) {
     try {
       const [{ result }] = await chrome.scripting.executeScript({
@@ -29,10 +36,12 @@ async function waitForApp(tabId, timeoutMs = 15000) {
         func: () => typeof window.reconstructImport === 'function'
       });
       if (result) return;
-    } catch { /* tabblad nog aan het laden */ }
+      lastError = 'importfunctie nog niet geladen';
+    } catch (err) { lastError = String(err?.message || err); }
     await new Promise(r => setTimeout(r, 300));
   }
-  throw new Error('Reconstruct reageert niet. Draait de lokale server (tools/serve.py)?');
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  throw new Error(`Reconstruct reageert niet (${tab?.url || 'onbekend tabblad'}): ${lastError}`);
 }
 
 // Verversen: haal de liveblogpagina op met de cookies van de gebruiker (toestemming is al gegeven in Chrome).
@@ -125,6 +134,8 @@ chrome.action.onClicked.addListener(async (tab) => {
     );
     const appTab = await openApp();
     await waitForApp(appTab.id);
+    // een tabblad dat al open stond voor het (her)laden van de extensie mist de bridge; zonder bridge geen liveblog-API
+    await chrome.scripting.executeScript({ target: { tabId: appTab.id }, files: ['bridge.js'] });
     const [{ result: ok }] = await chrome.scripting.executeScript({
       target: { tabId: appTab.id },
       world: 'MAIN',

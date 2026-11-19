@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Reconstruct – liveblog toevoegen",
-  "version": "1.3.3",
+  "version": "1.4.2",
   "description": "Voegt de liveblog in het huidige tabblad met één klik toe aan Reconstruct en ververst toegevoegde liveblogs.",
   "action": {
     "default_title": "Liveblog toevoegen aan Reconstruct",
@@ -11,13 +11,14 @@
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["http://localhost:8777/*", "http://127.0.0.1:8777/*"],
+      "matches": ["https://news-reconstruct.vercel.app/*", "http://localhost:8777/*", "http://127.0.0.1:8777/*"],
       "js": ["bridge.js"],
       "run_at": "document_start"
     }
   ],
   "permissions": ["activeTab", "scripting"],
   "host_permissions": [
+    "https://news-reconstruct.vercel.app/*",
     "http://localhost:8777/*",
     "http://127.0.0.1:8777/*",
     "https://*.nu.nl/*",
