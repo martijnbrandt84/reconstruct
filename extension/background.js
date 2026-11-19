@@ -76,6 +76,35 @@ function hasHostAccess(url) {
   });
 }
 
+// Tickaroo staat de API alleen toe vanaf sitedomeinen; in het liveblog-tabblad is de oorsprong goed, in de extensie niet.
+chrome.runtime.onInstalled.addListener(setTickarooOrigin);
+chrome.runtime.onStartup.addListener(setTickarooOrigin);
+setTickarooOrigin();
+function setTickarooOrigin() {
+  chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: [1],
+    addRules: [{
+      id: 1,
+      condition: { urlFilter: '||cdn.tickaroo.com/api/', resourceTypes: ['xmlhttprequest'] },
+      action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Origin', operation: 'set', value: 'https://www.telegraaf.nl' }] }
+    }]
+  }).catch(err => console.warn('Origin-regel niet gezet:', err));
+}
+
+// Draait in het liveblog-tabblad en geeft de volledige Tickaroo-data terug (of null).
+async function fetchTickarooInPage() {
+  const html = document.documentElement.innerHTML;
+  const clientId = html.match(/tickarooClientId\\?"\s*:\s*\\?"([0-9a-f]{24})/i)?.[1]
+    || html.match(/<tickaroo-liveblog[^>]*\bclientid=["']([0-9a-f]{24})/i)?.[1];
+  const liveblogId = html.match(/\\?"name\\?"\s*:\s*\\?"liveBlogId\\?"\s*,\s*\\?"value\\?"\s*:\s*\\?"([0-9a-f]{24})/i)?.[1]
+    || html.match(/<tickaroo-liveblog[^>]*\bliveblogid=["']([0-9a-f]{24})/i)?.[1];
+  if (!clientId || !liveblogId) return null;
+  try {
+    const r = await fetch(`https://cdn.tickaroo.com/api/embed/v4/js/liveblog.json?client_id=${clientId}&liveblogId=${liveblogId}&limit=1000`, { credentials: 'omit' });
+    return r.ok ? { liveblogId, text: await r.text() } : null;
+  } catch { return null; }
+}
+
 // Draait in het liveblog-tabblad: klikt 'meer laden'-knoppen en scrolt door tot er geen nieuwe posts meer bijkomen.
 async function expandLiveblog() {
   // sites met een eigen liveblog-API (DPG-regio, Timepath) haalt de app zelf volledig op
@@ -132,6 +161,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     const [{ result: page }] = await runIn(
       () => ({ html: document.documentElement.outerHTML, url: location.href, title: document.title })
     );
+    page.tickaroo = (await runIn(fetchTickarooInPage).catch(() => [{}]))[0]?.result || null;
     const appTab = await openApp();
     await waitForApp(appTab.id);
     // een tabblad dat al open stond voor het (her)laden van de extensie mist de bridge; zonder bridge geen liveblog-API

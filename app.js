@@ -366,6 +366,12 @@ function textStats(rows) {
 
 const rowHead = (r) => { const h = String(r[state.mapping.title] ?? '').trim(); return PLACEHOLDER_HEAD.test(h) ? '' : h; };
 const rowText = (r) => `${r[state.mapping.title] ?? ''} ${state.mapping.body ? r[state.mapping.body] ?? '' : ''}`;
+// tekst van de post zonder de kop die er soms vooraan in staat; leeg = alleen kop, beeld of embed
+const bodyOnly = (r) => {
+  const b = fullText(state.mapping.body ? r[state.mapping.body] : '');
+  const h = fullText(r[state.mapping.title]);
+  return h && b.startsWith(h) ? b.slice(h.length).trim() : b;
+};
 const hasMatch = (re, s) => (String(s).match(re) || []).length > 0;
 /** Tekstmaten per uur. test(it): telt een post mee in de staafgrafiek; key: maat uit textStats voor lijn en heatmap, of value(items).
  *  moments: rol bij gedeeld nieuws nodig (chartRole); bars: false = niet als staaf. */
@@ -2332,11 +2338,43 @@ function detectTickarooEmbed(rawHtml) {
   return clientId && liveblogId ? { clientId, liveblogId } : null;
 }
 
-async function fetchTickarooLiveblogRows(info, doc) {
+/** Sportevents (doelpunt, wissel, rust) hebben geen tekstblok: team, minuut en spelers staan in sport_event.
+ *  Daar maken we een kop van, zoals 'Vervanging Nederland 64': Justin Kluivert voor Quinten Timber'. */
+function tickarooSportLine(se) {
+  if (!se?.event_type) return '';
+  const type = String(se.event_type).split('.').pop();
+  const name = (p) => p?.player?.name || p?.player?.short_name || '';
+  const by = (t) => (se.players || []).filter(p => p.event_player_type === t).map(name).filter(Boolean);
+  const phase = se.phase?.name || '';
+  const label = se.title || (/^(start|resume-halves)$/.test(type) && phase ? `Begin ${phase}` : phase) || type;
+  const where = [se.team?.name, se.time_of_play].filter(Boolean).join(' ');
+  let detail = '';
+  if (by('in').length || by('out').length) detail = `${by('in').join(', ')} voor ${by('out').join(', ')}`;
+  else if (by('scorer').length) detail = `${by('scorer').join(', ')}${by('assist').length ? ` (assist ${by('assist').join(', ')})` : ''}`;
+  else detail = (se.players || []).map(p => name(p)).filter(Boolean).join(', ');
+  return `${[label, where].filter(Boolean).join(' ')}${detail ? `: ${detail}` : ''}`.replace(/\s+/g, ' ').trim();
+}
+
+// Tickaroo geeft de API alleen vrij voor de sitedomeinen en localhost (anders 403); op Vercel levert de extensie de data aan.
+// De meegegeven data geldt alleen voor de import van dat moment; verversen haalt altijd opnieuw op.
+let tickarooSeed = null;
+async function tickarooApiData(info) {
+  const seed = tickarooSeed;
+  tickarooSeed = null;
+  if (seed?.liveblogId === info.liveblogId) {
+    try { return JSON.parse(seed.text); } catch { /* val terug op ophalen */ }
+  }
   const url = `https://cdn.tickaroo.com/api/embed/v4/js/liveblog.json?client_id=${info.clientId}&liveblogId=${info.liveblogId}&limit=1000`;
+  if (extensionBridge) {
+    try { return JSON.parse(await requestPage(url)); } catch (err) { console.warn('Tickaroo via extensie mislukt:', err); }
+  }
   const res = await fetch(url, { mode: 'cors', credentials: 'omit' });
   if (!res.ok) throw new Error(`Tickaroo gaf status ${res.status}`);
-  const data = await res.json();
+  return res.json();
+}
+
+async function fetchTickarooLiveblogRows(info, doc) {
+  const data = await tickarooApiData(info);
   const events = Array.isArray(data?.gameShowResponse?.events) ? data.gameShowResponse.events : [];
   if (!events.length) return null;
 
@@ -2361,7 +2399,8 @@ async function fetchTickarooLiveblogRows(info, doc) {
     }
     const tmp = document.createElement('div');
     tmp.innerHTML = richHtml;
-    const headline = (tmp.querySelector('h1, h2, h3, h4')?.textContent || '').replace(/\s+/g, ' ').trim();
+    const headline = (tmp.querySelector('h1, h2, h3, h4')?.textContent || '').replace(/\s+/g, ' ').trim()
+      || tickarooSportLine(ev.sport_event);
     let body = (tmp.textContent || '').replace(/\s+/g, ' ').trim();
     if (headline && body.startsWith(headline)) body = body.slice(headline.length).trim();
     // beeld zit in 'media' of in een beeldblok; URL's van Tickaroo hebben vaak geen extensie
@@ -2406,6 +2445,27 @@ async function fetchTickarooLiveblogRows(info, doc) {
 
 /** Herkent een liveblog in tekst/HTML; geeft { headers, rows } of null (Timepath gaat async via de API). */
 async function parseLiveblogAny(text, pageUrl = '') {
+  return dropGenericHeadlines(await parseLiveblogRaw(text, pageUrl));
+}
+
+/** Sommige sites (o.a. De Telegraaf) zetten de liveblogtitel als kop op elke tekstpost; dat is geen kop.
+ *  Die posts krijgen de eerste zin als kop en tellen alleen hun eigen woorden. */
+function dropGenericHeadlines(result) {
+  if (!result?.rows) return result;
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const generic = (r) => !!r.titel && !!r.liveblog_titel
+    && (norm(r.titel) === norm(r.liveblog_titel) || norm(clipText(r.titel, 72)) === norm(r.liveblog_titel));
+  if (result.rows.filter(generic).length < 2) return result;
+  result.rows.forEach(r => {
+    if (!generic(r)) return;
+    const body = fullText(r.update_tekst);
+    r.titel = clipText(summarizeUpdateText(body) || 'Liveblog update', 150);
+    r.woorden = String(wordCount(body));
+  });
+  return result;
+}
+
+async function parseLiveblogRaw(text, pageUrl = '') {
   const safe = (fn) => { try { return fn(text); } catch { return null; } };
   const embed = safe(detectTimepathEmbed);
   if (embed) return fetchTimepathLiveblogRows(embed, new DOMParser().parseFromString(text, 'text/html'));
@@ -2416,6 +2476,7 @@ async function parseLiveblogAny(text, pageUrl = '') {
       if (result) return result;
     } catch (err) {
       console.warn('Tickaroo niet bruikbaar, val terug op de pagina:', err);
+      toast('De volledige liveblog kon niet worden opgehaald; alleen de zichtbare posts zijn ingelezen.');
     }
   }
   const dpg = extensionBridge ? safe((t) => detectDpgLiveblog(t, pageUrl)) : null;
@@ -4129,6 +4190,7 @@ const EXPLAIN = {
   regularity: '100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen',
   maxGap: 'Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee',
   medianWords: 'Mediaan aantal woorden per post, kop en tekst samen',
+  noText: 'Aandeel posts zonder lopende tekst: alleen een kop, beeld of embed (bij sport vaak een wissel of doelpunt)',
   image: MEDIA_EXPLAIN, video: MEDIA_EXPLAIN, social: MEDIA_EXPLAIN, dataviz: MEDIA_EXPLAIN,
   media: 'Aandeel posts met foto, video, social embed of datavisualisatie',
   link: 'Aandeel posts met minstens één link naar een eigen artikel (gratis of premium)',
@@ -5475,6 +5537,7 @@ function renderTable() {
       regularity: regularityScore(sessionGaps),
       maxGap: sessionGaps.length ? Math.max(...sessionGaps) : null,
       medianWords: median(words),
+      noText: m.body ? pct(rows.filter(r => !bodyOnly(r)).length, rows.length) : null,
       stackLength: {
         kort: lengths.filter(l => l === 'kort').length,
         middel: lengths.filter(l => l === 'middel').length,
@@ -5525,6 +5588,7 @@ function renderTable() {
     { key: 'regularity', label: 'Regelmaat (0\u2013100)', fmt: fmtNum, better: 'high' },
     { key: 'maxGap', label: 'Langste stilte', fmt: fmtDur, better: 'low' },
     { key: 'medianWords', label: 'Woorden (mediaan)', fmt: fmtNum, better: null },
+    { key: 'noText', label: 'Zonder tekst', fmt: fmtPct, better: null },
     { key: 'image', label: 'Met foto', fmt: fmtPct, better: 'high' },
     { key: 'video', label: 'Met video', fmt: fmtPct, better: 'high' },
     { key: 'social', label: 'Met social embed', fmt: fmtPct, better: 'high' },
@@ -5634,7 +5698,7 @@ function renderTable() {
   // korte, neutrale grafiektitels
   const CHART_TITLES = {
     n: 'Posts', perHour: 'Frequentie (posts per actief uur)', regularity: 'Regelmaat (0\u2013100)',
-    maxGap: 'Langste stilte', medianWords: 'Woorden per post (mediaan)',
+    maxGap: 'Langste stilte', medianWords: 'Woorden per post (mediaan)', noText: 'Aandeel posts zonder tekst',
     image: 'Aandeel met foto', video: 'Aandeel met video', social: 'Aandeel met social embed', dataviz: 'Aandeel met datavisualisatie',
     media: 'Aandeel met media', link: 'Aandeel met eigen link', premium: 'Aandeel met premium-link',
     external: 'Aandeel met uitgaande link',
@@ -5714,7 +5778,7 @@ function renderTable() {
   // korte kolomnamen in één stijl; de volledige uitleg staat in de tooltip
   const TABLE_HEAD = {
     n: 'Posts', perHour: 'Frequentie', regularity: 'Regelmaat', maxGap: 'Langste stilte',
-    medianWords: 'Woorden', image: 'Foto', video: 'Video', social: 'Social', dataviz: 'Visualisatie',
+    medianWords: 'Woorden', noText: 'Zonder tekst', image: 'Foto', video: 'Video', social: 'Social', dataviz: 'Visualisatie',
     link: 'Eigen link', premium: 'Premium-link', external: 'Uitgaand',
     firstShare: 'Als eerste', coverShare: 'Gebracht', medianLag: 'Achterstand', headQuote: 'Citaatkop',
     statements: 'Uitspraken', sourced: 'Bron', urgency: 'Urgentie', ownAngle: 'Eigen hoek'
@@ -5754,7 +5818,7 @@ function renderTable() {
 const TABLE_AXES = {
   speed: { label: 'Snelheid en ritme', title: 'Snelheid en ritme per liveblog',
     keys: ['n', 'perHour', 'regularity', 'maxGap', 'firstShare', 'coverShare', 'medianLag'] },
-  form: { label: 'Vorm', title: 'Vorm van de liveblogs', keys: ['medianWords', 'media', 'image', 'video', 'social', 'dataviz'] },
+  form: { label: 'Vorm', title: 'Vorm van de liveblogs', keys: ['medianWords', 'noText', 'media', 'image', 'video', 'social', 'dataviz'] },
   content: { label: 'Inhoud', title: 'Inhoud van de liveblogs',
     keys: ['sourced', 'statements', 'headQuote', 'urgency', 'ownAngle', 'link', 'premium', 'external'] }
 };
@@ -6206,8 +6270,9 @@ de Volkskrant;2026-11-11 06:12;Amerikanen rekenen af met Trump: Democraten steve
    Start
    ============================================================ */
 // Ingang voor de Chrome-extensie (extension/): krijgt de volledige HTML van de liveblogpagina.
-window.reconstructImport = ({ html, url } = {}) => {
+window.reconstructImport = ({ html, url, tickaroo } = {}) => {
   if (!html) return false;
+  tickarooSeed = tickaroo || null;
   loadData(String(html), false, { sourceUrl: url });
   return true;
 };

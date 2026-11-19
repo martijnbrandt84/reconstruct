@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Reconstruct – liveblog toevoegen",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Voegt de liveblog in het huidige tabblad met één klik toe aan Reconstruct en ververst toegevoegde liveblogs.",
   "action": {
     "default_title": "Liveblog toevoegen aan Reconstruct",
@@ -16,8 +16,9 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [
+    "https://cdn.tickaroo.com/*",
     "https://news-reconstruct.vercel.app/*",
     "http://localhost:8777/*",
     "http://127.0.0.1:8777/*",
