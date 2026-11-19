@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reconstruct</title>
+<link rel="icon" type="image/svg+xml" href="logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;800&family=Manrope:wght@700;800&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+<script src="lib/gif.js?v=20261116b"></script>
+<link rel="stylesheet" href="styles.css?v=20261119c">
+</head>
+<body>
+
+<header class="top-app-bar">
+  <div class="brand">
+    <img class="brand-mark" src="logo.svg" alt="">
+    <h1>Reconstruct</h1>
+  </div>
+  <div class="top-actions">
+    <div class="btn-group" role="group" aria-label="Exporteren">
+      <button class="btn" id="btnExportPng" title="Afbeelding downloaden"><span class="ms">image</span>PNG</button>
+      <button class="btn" id="btnExportVideo" title="Video van de tijdlijn"><span class="ms">videocam</span>Video</button>
+      <button class="btn" id="btnExportGif" title="GIF van de tijdlijn"><span class="ms">gif_box</span>GIF</button>
+      <button class="btn" id="btnExportCsv" title="Data van deze weergave als CSV"><span class="ms">download</span>CSV</button>
+    </div>
+    <button class="btn filled" id="btnCopy"><span class="ms">content_copy</span>Kopie</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <aside class="sidebar" id="sidebar">
+
+    <!-- DATA -->
+    <details class="panel" open>
+      <summary class="panel-head"><span class="ms panel-icon">database</span><h2>Data</h2><span class="status-dot" id="dot1"></span></summary>
+      <div class="panel-body">
+        <div id="datasetTabs" class="dataset-tabs" hidden></div>
+        <div class="refresh-row" id="refreshRow" hidden>
+          <button class="btn text" id="btnRefreshAll"><span class="ms">refresh</span>Alles verversen</button>
+          <label class="switch"><input type="checkbox" id="optAutoRefresh"><span></span>Elke 2 min</label>
+        </div>
+        <p class="hint" id="dataStatus">Nog geen data.</p>
+        <div class="sub-head"><h3>Toevoegen</h3></div>
+        <p class="hint">Liveblog: open hem in Chrome en klik op het Reconstruct-icoon. Tabel: plak of sleep hieronder.</p>
+        <div class="paste-zone" id="pasteZone">
+          <textarea id="pasteArea" spellcheck="false"
+            placeholder="Plak hier een tabel (Ctrl+V) uit Excel, Sheets of CSV, of sleep een bestand hierheen. De eerste regel zijn de kolomnamen."></textarea>
+        </div>
+        <div class="row">
+          <button class="btn text" id="btnBrowse"><span class="ms">folder_open</span>Bestand kiezen</button>
+          <button class="btn text" id="btnSample"><span class="ms">science</span>Voorbeeld</button>
+          <input type="file" id="fileInput" accept=".csv,.tsv,.txt" hidden>
+        </div>
+      </div>
+    </details>
+
+    <!-- VELDEN -->
+    <details class="panel" open>
+      <summary class="panel-head"><span class="ms panel-icon">table_rows</span><h2>Velden</h2><span class="status-dot" id="dot2"></span></summary>
+      <div class="panel-body">
+        <p class="hint" id="fieldAutoNote" hidden>Velden van liveblogs worden automatisch herkend.</p>
+        <div class="sub-head"><h3>Basis</h3></div>
+        <div class="field">
+          <label for="mapTime">Tijdstip <em>verplicht</em></label>
+          <select id="mapTime" data-target="time"></select>
+        </div>
+        <div class="field">
+          <label for="mapTitle">Titel <em>verplicht</em></label>
+          <select id="mapTitle" data-target="title"></select>
+        </div>
+        <div class="field">
+          <label for="mapBrand">Merk <em>logo en kleur</em></label>
+          <select id="mapBrand" data-target="brand"></select>
+        </div>
+        <div class="field">
+          <label for="mapBody">Tekst</label>
+          <select id="mapBody" data-target="body"></select>
+        </div>
+        <div class="field">
+          <label for="mapArticleUrl">Artikel-URL <em>kaart klikbaar</em></label>
+          <select id="mapArticleUrl" data-target="articleUrl"></select>
+        </div>
+        <div class="field">
+          <label for="mapArticleType">Artikeltype <em>LIVE-label</em></label>
+          <select id="mapArticleType" data-target="articleType"></select>
+        </div>
+        <div class="field">
+          <label for="mapPremium">Premium-artikel</label>
+          <select id="mapPremium" data-target="premium"></select>
+        </div>
+
+        <div class="sub-head"><h3>Links en media</h3></div>
+        <div class="field">
+          <label for="mapLink">Link in tekst</label>
+          <select id="mapLink" data-target="link"></select>
+        </div>
+        <div class="field">
+          <label for="mapLinkPremium">Link naar premium <em>ja/nee</em></label>
+          <select id="mapLinkPremium" data-target="linkPremium"></select>
+        </div>
+        <div class="field">
+          <label for="mapImage">Foto <em>URL</em></label>
+          <select id="mapImage" data-target="image"></select>
+        </div>
+        <div class="field">
+          <label for="mapVideo">Video <em>ja/nee</em></label>
+          <select id="mapVideo" data-target="video"></select>
+        </div>
+        <div class="field">
+          <label for="mapSocial">Social embed <em>gevuld = ja</em></label>
+          <select id="mapSocial" data-target="social"></select>
+        </div>
+        <div class="field">
+          <label for="mapDataviz">Datavisualisatie <em>ja/nee</em></label>
+          <select id="mapDataviz" data-target="dataviz"></select>
+        </div>
+        <p class="hint" id="fieldHint" hidden></p>
+
+        <div class="sub-head"><h3>Cijfers</h3></div>
+        <p class="hint">Getallen per artikel, zoals clicks of opens. Ze staan op de kaart en tellen mee in de grafiek per uur en de vergelijking.</p>
+        <div id="metricList" class="metric-list"></div>
+        <button class="btn tonal" id="btnAddMetric"><span class="ms">add</span>Cijfer toevoegen</button>
+      </div>
+    </details>
+
+    <!-- TITELS -->
+    <details class="panel" open id="panelBrands">
+      <summary class="panel-head"><span class="ms panel-icon">palette</span><h2>Kleuren</h2></summary>
+      <div class="panel-body">
+        <p class="hint">Kleur per titel, voor tijdlijn en grafieken. Aan- en uitzetten doe je bij Data.</p>
+        <div id="brandList" class="brand-list"></div>
+      </div>
+    </details>
+
+    <!-- PERIODE -->
+    <details class="panel" open>
+      <summary class="panel-head"><span class="ms panel-icon">date_range</span><h2>Periode</h2></summary>
+      <div class="panel-body">
+        <div class="row" id="periodRow" hidden>
+          <div class="field small"><label for="periodFrom">Dag van</label><select id="periodFrom"></select></div>
+          <div class="field small"><label for="periodTo">t/m dag</label><select id="periodTo"></select></div>
+        </div>
+        <div class="view-switch range-switch" role="group" aria-label="Tijdvenster">
+          <button type="button" class="view-btn" id="btnWholeDays"><span class="ms">calendar_today</span>Hele dag(en)</button>
+          <button type="button" class="view-btn" id="btnAutoRange"><span class="ms">compress</span>Compact</button>
+        </div>
+        <p class="hint" id="rangeSummary"></p>
+      </div>
+    </details>
+
+    <!-- OPMAAK -->
+    <details class="panel" open>
+      <summary class="panel-head"><span class="ms panel-icon">brush</span><h2>Opmaak</h2></summary>
+      <div class="panel-body">
+        <div class="field">
+          <label for="slideTitle">Titel <em>bij grafiek en tabel klein boven de kop</em></label>
+          <input type="text" id="slideTitle" placeholder="Bijv. Midterms 2026">
+        </div>
+
+        <div class="sub-head"><h3>Kaarten</h3></div>
+        <div class="field">
+          <label for="cardStyle">Stijl</label>
+          <select id="cardStyle">
+            <option value="modern">Modern: kleurvlak, rond, luchtig</option>
+            <option value="compact">Compact: klein en dicht</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="titleLines">Lengte van de titel</label>
+          <select id="titleLines">
+            <option value="0">Volledig tonen</option>
+            <option value="4">Inkorten tot 4 regels</option>
+            <option value="3">Inkorten tot 3 regels</option>
+            <option value="2">Inkorten tot 2 regels</option>
+          </select>
+        </div>
+        <label class="switch"><input type="checkbox" id="optShowImage" checked><span></span>Foto tonen</label>
+        <label class="switch"><input type="checkbox" id="optShowBody"><span></span>Tekst tonen naast de titel</label>
+        <label class="switch"><input type="checkbox" id="optHighlightMax" checked><span></span>Hoogste cijfer markeren</label>
+        <label class="switch"><input type="checkbox" id="optRelative"><span></span>Relatieve tijd</label>
+
+        <div class="sub-head"><h3>Tijdlijn</h3></div>
+        <div class="field">
+          <label for="slideFormat">Formaat</label>
+          <select id="slideFormat">
+            <option value="auto">Hoogte volgt de inhoud</option>
+            <option value="slide">Hele slide (1920 × 1080)</option>
+            <option value="under">Onder een slidetitel (1920 × 820)</option>
+          </select>
+        </div>
+        <label class="switch"><input type="checkbox" id="optShowDate" checked><span></span>Datum boven de tijdlijn</label>
+        <p class="hint" id="layoutHint"></p>
+        <p class="hint" id="sizeHint"></p>
+      </div>
+    </details>
+
+    <!-- EXPORT -->
+    <details class="panel" open>
+      <summary class="panel-head"><span class="ms panel-icon">ios_share</span><h2>Export</h2></summary>
+      <div class="panel-body">
+        <p class="hint">Voor de video en GIF van de tijdlijn.</p>
+        <div class="field">
+          <label for="gifSpeed">Snelheid</label>
+          <select id="gifSpeed">
+            <option value="slow">Langzaam (aanbevolen)</option>
+            <option value="normal">Normaal</option>
+            <option value="fast">Snel</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="videoMode">Videostijl</label>
+          <select id="videoMode">
+            <option value="cinematic">Rustig, met intro en outro</option>
+            <option value="briefing">Kort en direct</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <!-- WERKWIJZE -->
+    <details class="panel">
+      <summary class="panel-head"><span class="ms panel-icon">menu_book</span><h2>Werkwijze</h2></summary>
+      <div class="panel-body method">
+        <p class="hint">Hoe Reconstruct posts ophaalt, indeelt en meet, en waar de grenzen liggen.</p>
+
+        <div class="sub-head"><h3>Ophalen</h3></div>
+        <p>Posts komen rechtstreeks uit de liveblog-data van de site (DPG, VRT, Tickaroo, Timepath) of anders uit de pagina zelf. De Chrome-extensie haalt de pagina op met de eigen cookies van de gebruiker, zodat ook premium-liveblogs volledig binnenkomen. Verversen haalt de nieuwste versie op; dubbele posts (zelfde minuut en kop) worden samengevoegd.</p>
+        <p>Tijden staan in Nederlandse tijd. Alle maten gelden voor de gekozen periode en de aangezette datasets.</p>
+
+        <div class="sub-head"><h3>Maten</h3></div>
+        <dl>
+          <dt>Posts</dt><dd>Aantal posts in de gekozen periode.</dd>
+          <dt>Frequentie</dt><dd>Posts per actief uur. Pauzes van meer dan 2 uur tellen niet mee.</dd>
+          <dt>Regelmaat</dt><dd>0–100: 100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen. Pas vanaf 20 posts binnen actieve periodes.</dd>
+          <dt>Tussentijd</dt><dd>Mediane tijd tussen twee opeenvolgende posts binnen een actieve periode.</dd>
+          <dt>Langste stilte</dt><dd>Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee.</dd>
+          <dt>Woorden</dt><dd>Kop en tekst samen. Kort &lt; 40, middel 40–150, lang &gt; 150.</dd>
+          <dt>Link</dt><dd>Minstens één link naar een artikel. Social, grafiekdiensten, bestanden en eigen embeds tellen niet mee. Premium als een gelinkt artikel achter de betaalmuur staat.</dd>
+        </dl>
+
+        <div class="sub-head"><h3>Media</h3></div>
+        <p>Elke post valt in één rubriek, in deze volgorde: video, datavisualisatie, social embed, foto, geen media.</p>
+        <dl>
+          <dt>Video</dt><dd>Eigen videospeler of ingesloten video van de site.</dd>
+          <dt>Datavisualisatie</dt><dd>Embeds van Datawrapper, Flourish, Infogram, LocalFocus, AP-uitslagen en andere grafiekdiensten, plus eigen widgets van de site (bv. AD-kaarten, HLN-prognosetool).</dd>
+          <dt>Social embed</dt><dd>X, Instagram, YouTube, TikTok, Facebook, Bluesky, Threads, LinkedIn, Truth Social.</dd>
+          <dt>Foto</dt><dd>Minstens één afbeelding in de post. Auteursfoto's, logo's en iconen tellen niet mee.</dd>
+        </dl>
+
+        <div class="sub-head"><h3>Bereik</h3></div>
+        <p>Bereikdata (weergaven en gebruikers per titel per uur) wordt los geladen en via de titelnaam aan de liveblogs gekoppeld. Een tabel met alleen uurnummers wordt aan de gekozen dag gekoppeld.</p>
+        <dl>
+          <dt>Weergaven</dt><dd>Weergaven van de liveblog, opgeteld over de uren.</dd>
+          <dt>Gebruikers</dt><dd>Gebruikers per uur, opgeteld.</dd>
+          <dt>Per gebruiker</dt><dd>Weergaven gedeeld door gebruikers.</dd>
+          <dt>Per update</dt><dd>Weergaven gedeeld door het aantal posts in dezelfde periode.</dd>
+        </dl>
+
+        <div class="sub-head"><h3>Bekende beperkingen</h3></div>
+        <ul>
+          <li>Grafieken die als gewone afbeelding zijn geplaatst (o.a. RTL, NOS) tellen als foto: in de data is een kaart niet van een foto te onderscheiden.</li>
+          <li>De Morgen: eigen embeds (citaat- en linkblokken) tellen niet als datavisualisatie.</li>
+          <li>NU.nl: een interactieve widget komt binnen als lege post met een plaatshouder; die telt als datavisualisatie.</li>
+          <li>Bereikdata: gebruikers per uur worden opgeteld en zijn dus geen unieke gebruikers.</li>
+          <li>Bereik en posts lopen gelijk op, maar dat zegt niets over oorzaak: ook de plek op de homepage en pushberichten bepalen het bereik.</li>
+          <li>Verwijderde posts zijn niet terug te zien. Bewerkte posts tellen op hun oorspronkelijke tijd.</li>
+          <li>De uitkomsten gaan over één dag of event. Verschillen tussen titels zijn daarom indicaties, geen vaste patronen.</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="sidebar-foot">
+      <button class="btn text danger" id="btnReset"><span class="ms">refresh</span>Opnieuw beginnen</button>
+    </div>
+  </aside>
+
+  <section class="stage" id="stage">
+    <div class="view-bar">
+      <div class="view-switch" role="tablist" aria-label="Weergave">
+        <button type="button" class="view-btn" role="tab" data-view="timeline"><span class="ms">view_timeline</span>Tijdlijn</button>
+        <button type="button" class="view-btn" role="tab" data-view="chart"><span class="ms">show_chart</span>Per uur</button>
+        <button type="button" class="view-btn" role="tab" data-view="table"><span class="ms">table</span>Tabel</button>
+        <button type="button" class="view-btn" role="tab" data-view="compare"><span class="ms">bar_chart</span>Vergelijking</button>
+      </div>
+      <label class="view-filter" id="chartTypeField" hidden>
+        <span>Type</span>
+        <select id="chartType">
+          <option value="bars">staafgrafiek</option>
+          <option value="line">lijngrafiek</option>
+          <option value="heatmap">heatmap</option>
+          <option value="combo">posts en bereik</option>
+        </select>
+      </label>
+      <label class="view-filter" id="comboTitleField" hidden>
+        <span>Titel</span>
+        <select id="comboTitle"></select>
+      </label>
+      <label class="view-filter" id="chartMeasureField" hidden>
+        <span>Tel</span>
+        <select id="chartMeasure"></select>
+      </label>
+      <label class="view-filter" id="chartColorField" hidden>
+        <span>Kleur</span>
+        <select id="chartColorBy">
+          <option value="auto">automatisch</option>
+          <option value="title">per titel</option>
+          <option value="links">link / premium-link</option>
+          <option value="media">foto / video / social embed</option>
+        </select>
+      </label>
+      <label class="view-filter" id="compareShowField" hidden>
+        <span>Toon</span>
+        <select id="compareShow"></select>
+      </label>
+      <label class="view-filter" id="compareShow2Field" hidden>
+        <span>Naast</span>
+        <select id="compareShow2"></select>
+      </label>
+      <div class="stage-info">
+        <span class="hint" id="previewInfo">0 tegels</span>
+        <div class="status-strip" id="statusStrip" aria-live="polite">
+          <span class="status-chip" id="statTotal">Totaal: 0</span>
+          <span class="status-chip ok" id="statInWindow">In venster: 0</span>
+          <span class="status-chip warn" id="statOutside">Buiten venster: 0</span>
+          <span class="status-chip danger" id="statRemoved">Verwijderd: 0</span>
+          <span class="status-chip danger" id="statHidden">Merk verborgen: 0</span>
+          <span class="status-chip warn" id="statUnplaced">Niet exact: 0</span>
+        </div>
+        <button class="btn text" id="btnRestore" hidden><span class="ms">undo</span>Herstel verwijderd (<span id="removedCount">0</span>)</button>
+      </div>
+      <div class="zoom">
+        <button class="icon-btn" id="btnZoomOut" title="Uitzoomen"><span class="ms">zoom_out</span></button>
+        <span id="zoomVal">—</span>
+        <button class="icon-btn" id="btnZoomIn" title="Inzoomen"><span class="ms">zoom_in</span></button>
+        <button class="icon-btn" id="btnZoomFit" title="Passend maken"><span class="ms">fit_screen</span></button>
+      </div>
+    </div>
+    <div class="stage-scroll" id="stageScroll">
+      <div class="slide-wrap" id="slideWrap">
+        <div class="slide" id="slide">
+          <div class="slide-head" id="slideHead" hidden>
+            <div class="slide-kicker" id="slideKicker" hidden></div>
+            <h2 class="slide-title" id="slideTitleEl" hidden></h2>
+            <div class="slide-meta" id="slideMeta" hidden></div>
+          </div>
+          <div class="slide-body" id="slideBody">
+            <div class="timeline-axis"><div class="timeline-track" id="timelineTrack"></div></div>
+            <div class="card-layer" id="cardLayer"></div>
+          </div>
+          <div class="chart-view" id="chartView" hidden></div>
+          <div class="table-view" id="tableView" hidden></div>
+          <div class="empty-state" id="emptyState">
+            <span class="ms big">timeline</span>
+            <p id="emptyText">Voeg data toe in het Data-blok</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="stage-foot hint">Tip: ga met je muis over een tegel en klik op het kruisje om hem te verwijderen.</p>
+  </section>
+</main>
+
+<div class="snackbar" id="snackbar"></div>
+<div class="recording-overlay" id="recordingOverlay" hidden>
+  <div class="recording-card">
+    <div class="recording-title"><span class="rec-dot" aria-hidden="true"></span><span id="recordingTitle">Opname bezig…</span></div>
+    <p>Houd dit tabblad open en actief tot de export klaar is.</p>
+    <p class="recording-sub" id="recordingSub">Minimaliseren of wisselen van tab kan haperingen geven.</p>
+    <div class="recording-progress" aria-hidden="true"><span id="recordingProgressBar"></span></div>
+    <p class="recording-meta" id="recordingMeta">0%</p>
+  </div>
+</div>
+
+<script src="logos.js?v=20261116b"></script>
+<script src="favicons.js?v=20261117a"></script>
+<script src="app.js?v=20261119k"></script>
+</body>
+</html>
