@@ -62,7 +62,7 @@ const BRAND_COLORS = {
 };
 
 /* Logo's die optisch kleiner ogen dan de rest krijgen extra hoogte */
-const LOGO_SCALE = { 'HLN': 1.45 };
+const LOGO_SCALE = {};
 
 const BRAND_HOST_FALLBACK = {
   nunl: 'www.nu.nl',
