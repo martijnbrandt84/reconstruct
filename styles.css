@@ -625,6 +625,18 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px;
 .cc-label b { font-weight: 500; }
 .cc-label small { font-size: .9rem; color: var(--md-on-surface-variant); }
 .cc-logo { width: 36px; height: 36px; object-fit: contain; border-radius: 8px; }
+.compare-scatter { display: flex; flex-direction: column; gap: 8px; }
+.sc-body { display: flex; align-items: center; flex: 1; min-height: 0; }
+.sc-ylab { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 1.15rem; font-weight: 500; color: var(--md-on-surface-variant); }
+.sc-plot { position: relative; margin: 16px 40px 44px 90px; border-left: 2px solid var(--md-outline); border-bottom: 2px solid var(--md-outline); }
+.sc-gy { position: absolute; left: 0; right: 0; border-top: 1px solid var(--md-outline-variant); }
+.sc-gx { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--md-outline-variant); }
+.sc-ty { position: absolute; left: -84px; width: 70px; text-align: right; transform: translateY(50%); font-size: 1.05rem; font-weight: 500; color: var(--md-on-surface-variant); }
+.sc-tx { position: absolute; bottom: -36px; transform: translateX(-50%); font-size: 1.05rem; font-weight: 500; color: var(--md-on-surface-variant); }
+.sc-pt { position: absolute; transform: translate(-50%, 50%); border-radius: 50%; background: #EADDFF; border: 2px solid #6750A4; display: flex; align-items: center; justify-content: center; z-index: 2; }
+.sc-logo { width: 58%; height: 58%; object-fit: contain; border-radius: 6px; }
+.sc-name { position: absolute; font-size: 1.15rem; font-weight: 500; white-space: nowrap; line-height: 28px; color: var(--md-on-surface); z-index: 3; }
+.sc-xlab { text-align: center; font-size: 1.15rem; font-weight: 500; color: var(--md-on-surface-variant); }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 14px 32px; font-size: 1.15rem; font-weight: 500; color: var(--md-on-surface); }
 .chart-legend-item { display: inline-flex; align-items: center; gap: 10px; }
 .chart-legend-item i { width: 20px; height: 20px; border-radius: 4px; display: inline-block; }

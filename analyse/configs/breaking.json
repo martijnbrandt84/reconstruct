@@ -1,0 +1,34 @@
+{
+  "event": "Breaking news",
+  "persoon": "",
+  "bronnen": {
+    "Persbureau": ["ANP", "AP", "Associated Press", "Reuters", "AFP", "Belga", "Bloomberg", "dpa"],
+    "Officiële instanties": ["politie", "brandweer", "veiligheidsregio", "ambulancedienst", "OM", "Openbaar Ministerie", "parket", "ministerie", "minister\\w*", "burgemeester", "woordvoerder\\w*", "gemeente", "regering", "leger", "defensie"],
+    "Internationale media": ["CNN", "BBC", "(?:The )?New York Times", "(?:The )?Washington Post", "(?:The )?Guardian", "Al Jazeera", "Sky News", "Le Monde", "Der Spiegel", "Bild"],
+    "Social media": ["op X", "Telegram", "TikTok", "(?:via|op) Instagram", "Facebook", "Truth Social", "video's op sociale media"],
+    "Ooggetuigen": ["ooggetuig\\w*", "getuig\\w*", "omstander\\w*", "buurtbewoner\\w*", "bewoner\\w*"],
+    "Eigen verslaggever": ["correspondent\\w*", "verslaggever\\w*", "onze reporter", "ter plaatse"]
+  },
+  "bronnamen": ["ANP", "AP", "Reuters", "AFP", "Belga", "politie", "brandweer", "BBC", "CNN", "New York Times", "Telegram"],
+  "frames": {
+    "Onzekerheid": {"uitleg": "onduidelijk, mogelijk, volgens", "woorden": ["onduidelijk", "nog niet bekend", "niet bevestigd", "onbevestigd\\w*", "mogelijk", "waarschijnlijk", "lijkt", "lijken", "vermoedelijk", "naar verluidt", "voorlopig\\w*"]},
+    "Dramatisering": {"uitleg": "chaos, schokkend, ongekend", "woorden": ["chaos", "schok\\w*", "drama\\w*", "ramp\\w*", "verwoest\\w*", "ongekend\\w*", "historisch\\w*", "gigantisch\\w*", "enorm\\w*", "angstaanjagend\\w*", "afschuwelijk\\w*"]},
+    "Menselijke maat": {"uitleg": "slachtoffers, families, bewoners", "woorden": ["slachtoffer\\w*", "famili\\w*", "nabestaand\\w*", "bewoner\\w*", "gewond\\w*", "doden", "overleden", "emotie\\w*", "verdriet\\w*", "kinderen"]},
+    "Conflict": {"uitleg": "kritiek, beschuldigt, haalt uit", "woorden": ["aanval\\w*", "haalt uit", "kritiek", "woede\\w*", "beschuldig\\w*", "verwijt\\w*", "ruzie", "botsing\\w*", "veroordeel\\w*"]},
+    "Duiding": {"uitleg": "wat betekent, waarom, uitleg", "woorden": ["waarom", "wat betekent", "betekent", "analyse", "uitleg", "snel mee", "dit weten we", "wat we weten", "met andere woorden"]}
+  },
+  "eigen_land": ["Nederland\\w*", "Belgi\\w*", "Vlaams\\w*", "Vlaming\\w*", "Brussel", "Den Haag", "Europ\\w*", "EU", "NAVO", "kabinet"],
+  "sprekers": {
+    "Hulpdiensten en politie": ["politie\\w*", "brandweer\\w*", "ambulance\\w*", "hulpdienst\\w*", "veiligheidsregio\\w*", "woordvoerder\\w*", "parket", "OM"],
+    "Politiek": ["minister\\w*", "premier", "burgemeester\\w*", "regering\\w*", "kabinet", "president", "Kamerlid\\w*", "partij\\w*"],
+    "Ooggetuigen en bewoners": ["ooggetuig\\w*", "getuig\\w*", "omstander\\w*", "buurtbewoner\\w*", "bewoner\\w*", "inwoner\\w*"],
+    "Experts": ["expert\\w*", "deskundige\\w*", "analist\\w*", "professor", "hoogleraar", "onderzoeker\\w*", "specialist\\w*", "kenner\\w*"],
+    "Eigen verslaggever": ["correspondent\\w*", "verslaggever\\w*", "onze reporter", "ter plaatse"]
+  },
+  "urgentie": {
+    "Nu": {"uitleg": "zojuist, op dit moment", "woorden": ["zojuist", "zonet", "zopas", "zo-even", "net bekend\\w*", "net binnen", "breaking", "nu(?!\\.nl)", "op dit moment", "op dit ogenblik", "momenteel", "live(?!-)", "nog maar net"]},
+    "Spanning": {"uitleg": "spannend, cruciaal", "woorden": ["spann\\w*", "spanning\\w*", "nagelbijt\\w*", "cruciaal", "cruciale", "beslissend\\w*", "op het spel", "kantelmoment", "adem in", "bang\\w*", "angst\\w*", "paniek\\w*"]},
+    "Vooruitblik": {"uitleg": "straks, elk moment", "woorden": ["straks", "zo meteen", "zometeen", "elk moment", "ieder moment", "binnen het uur", "binnen enkele minuten", "binnen enkele uren", "komende uren", "komende uur", "wordt verwacht", "worden verwacht", "verwacht wordt", "wachten op", "afwachten", "persconferentie\\w*"]}
+  },
+  "clusters": {"drempel": 0.32, "venster": 180}
+}

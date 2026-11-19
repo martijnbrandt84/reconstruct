@@ -318,6 +318,181 @@ const LENGTH_CLASSES = [['kort', 'Kort (<40 woorden)', 40], ['middel', 'Middel (
 
 const postWords = (r) => +r.woorden || wordCount(r[state.mapping.title], state.mapping.body ? r[state.mapping.body] : '');
 const lengthClass = (words) => LENGTH_CLASSES.find(([, , max]) => words < max)[0];
+// woorden per zin in de tekst van een post; zinnen korter dan 3 woorden (kreten, bijschriften) tellen niet mee
+const splitSentences = (text) => String(text || '')
+  .split(/(?<=[.!?])\s+(?=[A-ZÀ-Ý"'‘“,])/)
+  .filter(s => s.split(/\s+/).filter(w => /\w/.test(w)).length >= 3);
+const sentenceLengths = (r) => splitSentences(state.mapping.body && r[state.mapping.body])
+  .map(s => s.split(/\s+/).filter(w => /\w/.test(w)).length);
+
+/* ---------- tekstanalyse: maten die voor elke Nederlandstalige liveblog werken, los van onderwerp of gebeurtenis ---------- */
+const PLACEHOLDER_HEAD = /^Liveblog update( \d+)?$/;
+const wordsRe = (words, flags = 'iu') => new RegExp(`(?<![\\p{L}\\d])(?:${words.join('|')})(?![\\p{L}\\d])`, flags);
+// aanhalingstekens; een los apostrof-s ('s nachts, Trump's) telt niet
+const QUOTE_RE = /["“”„]|,,|‘[^’]{3,}’|'[^'\s][^']{2,}'/;
+const SPEECH_WORDS = ['zegt', 'zei', 'zeiden', 'zeggen', 'aldus', 'verklaar\\p{L}*', 'laat weten', 'liet weten', 'stelt', 'stelde', 'schrijft', 'schreef',
+  'reageer\\p{L}*', 'reageert', 'reageerde', 'benadruk\\p{L}*', 'waarschuw\\p{L}*', 'noemt', 'noemde', 'klinkt het', 'roept', 'riep', 'belooft', 'beloofde',
+  'eist', 'eiste', 'claimt', 'claimde', 'beweert', 'beweerde'];
+const SPEECH_RE = wordsRe(SPEECH_WORDS);
+const AGENCY_RE = wordsRe(['ANP', 'AP', 'Associated Press', 'Reuters', 'AFP', 'Belga', 'dpa', 'Bloomberg'], 'u');
+const ATTRIB_RE = wordsRe(['volgens', 'meldt', 'melden', 'meldde', 'berichtt?en', 'berichtte', 'laat weten', 'liet weten', 'bevestigt', 'bevestigde', 'aldus', 'schrijft', 'schreef']);
+const URGENCY_WORDS = ['zojuist', 'zonet', 'zopas', 'zo-even', 'net bekend\\p{L}*', 'net binnen', 'breaking', 'nu(?!\\.nl)', 'op dit moment', 'op dit ogenblik', 'momenteel',
+  'nog maar net', 'spann\\p{L}*', 'spanning\\p{L}*', 'nek-aan-nek\\p{L}*', 'nagelbijt\\p{L}*', 'cruciaal', 'cruciale', 'beslissend\\p{L}*', 'doorslaggevend\\p{L}*', 'op het spel',
+  'kantelmoment', 'adem in'];
+const OWN_ANGLE_WORDS = ['Nederland\\p{L}*', 'Belgi\\p{L}*', 'Vlaams\\p{L}*', 'Vlaming\\p{L}*', 'Brussel', 'Den Haag', 'Europ\\p{L}*', 'EU', 'NAVO'];
+const URGENCY_RE = wordsRe(URGENCY_WORDS, 'giu'), OWN_ANGLE_RE = wordsRe(OWN_ANGLE_WORDS, 'giu');
+// fotobijschriften en ondertekening als (ANP) zijn geen bronvermelding in de tekst
+const stripCredits = (s) => String(s).replace(/\((?:foto|beeld)[^)]*\)/gi, ' ').replace(/\((?:ANP|Belga|AP|AFP|Reuters|Redactie)[^)]*\)\s*$/i, ' ');
+
+/** Tekstmaten per titel: kopstijl, citaten, bronvermelding en woordgebruik. */
+function textStats(rows) {
+  const m = state.mapping;
+  if (!m.title) return {};
+  const heads = rows.map(r => String(r[m.title] ?? '').trim()).filter(h => h && !PLACEHOLDER_HEAD.test(h));
+  const bodies = m.body ? rows.map(r => String(r[m.body] ?? '').trim()).filter(Boolean) : [];
+  const all = rows.map(r => `${r[m.title] ?? ''} ${m.body ? r[m.body] ?? '' : ''}`);
+  const share = (arr, f) => arr.length ? arr.filter(f).length / arr.length : null;
+  const sents = bodies.flatMap(splitSentences);
+  const words = all.reduce((a, x) => a + x.split(/\s+/).filter(w => /\p{L}/u.test(w)).length, 0);
+  const per1000 = (re) => words ? 1000 * all.reduce((a, x) => a + (x.match(re) || []).length, 0) / words : null;
+  return {
+    headQuote: share(heads, h => QUOTE_RE.test(h)),
+    statements: sents.length ? sents.filter(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)).length / sents.length : null,
+    sourced: share(all, x => { const c = stripCredits(x); return AGENCY_RE.test(c) || ATTRIB_RE.test(c); }),
+    urgency: per1000(URGENCY_RE),
+    ownAngle: per1000(OWN_ANGLE_RE)
+  };
+}
+
+const rowHead = (r) => { const h = String(r[state.mapping.title] ?? '').trim(); return PLACEHOLDER_HEAD.test(h) ? '' : h; };
+const rowText = (r) => `${r[state.mapping.title] ?? ''} ${state.mapping.body ? r[state.mapping.body] ?? '' : ''}`;
+const hasMatch = (re, s) => (String(s).match(re) || []).length > 0;
+/** Tekstmaten per uur. test(it): telt een post mee in de staafgrafiek; key: maat uit textStats voor lijn en heatmap, of value(items).
+ *  moments: rol bij gedeeld nieuws nodig (chartRole); bars: false = niet als staaf. */
+let chartRole = () => null;
+const TEXT_MEASURES = {
+  __tfirst: { axis: 'speed', post: 'als eerste bij gedeeld nieuws', rate: 'Als eerste bij gedeeld nieuws (%)', moments: true,
+    test: it => !!chartRole(it)?.first,
+    value: its => { const r = its.map(chartRole).filter(Boolean); return r.length >= 2 ? 100 * r.filter(x => x.first).length / r.length : null; } },
+  __tlag: { axis: 'speed', rate: 'Achterstand als volger (mediaan, min)', moments: true, bars: false,
+    value: its => { const lags = its.map(chartRole).filter(x => x && !x.first).map(x => x.lag); return lags.length ? medianOf(lags) : null; } },
+  __tquote: { axis: 'content', post: 'citaat in de kop', rate: 'Koppen met citaat (%)', key: 'headQuote', pct: true, test: it => QUOTE_RE.test(rowHead(it.row)) },
+  __tstate: { axis: 'content', post: 'een uitspraak', rate: 'Zinnen met een uitspraak (%)', key: 'statements', pct: true,
+    test: it => splitSentences(state.mapping.body && it.row[state.mapping.body]).some(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)) },
+  __tsource: { axis: 'content', post: 'bronvermelding', rate: 'Posts met bronvermelding (%)', key: 'sourced', pct: true,
+    test: it => { const c = stripCredits(rowText(it.row)); return AGENCY_RE.test(c) || ATTRIB_RE.test(c); } },
+  __turgency: { axis: 'content', post: 'urgentietaal', rate: 'Urgentietaal per 1.000 woorden', key: 'urgency', test: it => hasMatch(URGENCY_RE, rowText(it.row)) },
+  __town: { axis: 'content', post: 'eigen land of Europa', rate: 'Eigen land of Europa per 1.000 woorden', key: 'ownAngle', test: it => hasMatch(OWN_ANGLE_RE, rowText(it.row)) }
+};
+// per uur pas vanaf 3 posts; daaronder springt een aandeel van 0 naar 100%
+const textValue = (tm, its) => {
+  if (tm.value) return tm.value(its);
+  if (its.length < 3) return null;
+  const v = textStats(its.map(it => it.row))[tm.key];
+  return v === null || v === undefined ? null : tm.pct ? v * 100 : v;
+};
+
+const STOP_NL = new Set(`de het een en van in op te dat die is voor met zijn aan er om als bij ook niet maar door naar uit
+heeft hebben was werd wordt worden zal zou kan al nog dan dit deze of over tot na hij zij ze we wij je u ik hun haar
+hem meer veel nu wel geen toch zo daar hier waar wat wie hoe toen omdat terwijl volgens tegen onder sinds tussen
+eerste twee drie vier vijf jaar uur procent maandag dinsdag woensdag donderdag vrijdag zaterdag zondag nacht avond
+vannacht vanavond vanochtend vandaag ongeveer zegt zei the and to`.split(/\s+/));
+let momentsCache = { key: '', value: null };
+
+/** Gedeelde nieuwsmomenten: posts van verschillende titels die binnen `windowMin` minuten inhoudelijk op elkaar lijken
+ *  (tf-idf op kop en begin van de tekst). Per titel: hoe vaak eerste, hoe vaak volger en de achterstand in minuten. */
+function sharedMoments(items, keyOf, thr = 0.32, windowMin = 180) {
+  const m = state.mapping;
+  const list = items.slice().sort((a, b) => a.minutes - b.minutes);
+  const cacheKey = `${m.title}|${m.body}|` + list.map(it => momentKey(it, keyOf)).join('|');
+  if (momentsCache.key === cacheKey) return momentsCache.value;
+  const n = list.length;
+  const tfs = list.map(it => {
+    const head = String(it.row[m.title] ?? ''), body = m.body ? String(it.row[m.body] ?? '').slice(0, 400) : '';
+    const toks = (`${head} ${head} ${body}`.toLowerCase().match(/[a-zà-ÿ][a-zà-ÿ'-]{2,}/g) || []).filter(w => !STOP_NL.has(w));
+    const tf = new Map();
+    toks.forEach((w, i) => {
+      tf.set(w, (tf.get(w) || 0) + 1);
+      if (i) tf.set(`${toks[i - 1]} ${w}`, (tf.get(`${toks[i - 1]} ${w}`) || 0) + 1);
+    });
+    return tf;
+  });
+  const df = new Map();
+  tfs.forEach(tf => tf.forEach((_, t) => df.set(t, (df.get(t) || 0) + 1)));
+  const vecs = tfs.map(tf => {
+    const v = new Map();
+    let norm = 0;
+    tf.forEach((c, t) => {
+      const d = df.get(t);
+      if (d < 2) return;
+      const w = (1 + Math.log(c)) * (Math.log((1 + n) / (1 + d)) + 1);
+      v.set(t, w);
+      norm += w * w;
+    });
+    norm = Math.sqrt(norm) || 1;
+    v.forEach((w, t) => v.set(t, w / norm));
+    return v;
+  });
+  const sim = (i, j) => {
+    let [a, b] = vecs[i].size < vecs[j].size ? [vecs[i], vecs[j]] : [vecs[j], vecs[i]];
+    let s = 0;
+    a.forEach((w, t) => { const x = b.get(t); if (x) s += w * x; });
+    return s;
+  };
+  const keys = list.map(keyOf);
+  const ok = list.map(it => !PLACEHOLDER_HEAD.test(String(it.row[m.title] ?? '').trim()) && postWords(it.row) >= 8);
+  const pairs = [];
+  for (let i = 0; i < n; i++) {
+    if (!ok[i]) continue;
+    for (let j = i + 1; j < n && list[j].minutes - list[i].minutes <= windowMin; j++) {
+      if (!ok[j] || keys[i] === keys[j]) continue;
+      const s = sim(i, j);
+      if (s >= thr) pairs.push([s, i, j]);
+    }
+  }
+  // sterkste koppelingen eerst; per titel hooguit één post per moment en het hele moment binnen het venster
+  pairs.sort((a, b) => b[0] - a[0]);
+  const parent = list.map((_, i) => i);
+  const find = (a) => { while (parent[a] !== a) a = parent[a] = parent[parent[a]]; return a; };
+  const members = new Map(list.map((_, i) => [i, [i]]));
+  pairs.forEach(([, i, j]) => {
+    const a = find(i), b = find(j);
+    if (a === b) return;
+    const A = members.get(a), B = members.get(b);
+    const titlesA = new Set(A.map(k => keys[k]));
+    if (B.some(k => titlesA.has(keys[k]))) return;
+    const span = [...A, ...B].map(k => list[k].minutes);
+    if (Math.max(...span) - Math.min(...span) > windowMin) return;
+    let total = 0;
+    A.forEach(x => B.forEach(y => { total += sim(x, y); }));
+    if (total / (A.length * B.length) < thr * 0.75) return;
+    parent[b] = a;
+    members.set(a, A.concat(B));
+    members.delete(b);
+  });
+  const per = new Map();
+  const roles = new Map();
+  const slot = (k) => per.get(k) || per.set(k, { first: 0, follow: 0, lags: [] }).get(k);
+  let moments = 0;
+  members.forEach(idx => {
+    if (idx.length < 2) return;
+    moments++;
+    idx.sort((a, b) => list[a].minutes - list[b].minutes);
+    const t0 = list[idx[0]].minutes;
+    slot(keys[idx[0]]).first++;
+    roles.set(momentKey(list[idx[0]], keyOf), { first: true, lag: 0 });
+    idx.slice(1).forEach(k => {
+      const p = slot(keys[k]);
+      p.follow++;
+      p.lags.push(list[k].minutes - t0);
+      roles.set(momentKey(list[k], keyOf), { first: false, lag: list[k].minutes - t0 });
+    });
+  });
+  momentsCache = { key: cacheKey, value: { moments, per, roles } };
+  return momentsCache.value;
+}
+// sleutel per post, ook als visibleItems() nieuwe objecten maakt
+const momentKey = (it, keyOf) => `${keyOf(it)}@${it.minutes}@${String(it.row[state.mapping.title] ?? '').slice(0, 30)}`;
 
 /** Sessies (pauzes > PAUSE_MIN eruit): actieve minuten en de tussentijden binnen sessies. */
 function rhythmOf(sortedMinutes) {
@@ -3600,7 +3775,7 @@ function renderTimeline() {
     if (state.settings.autoFit) autoRange();
     updateRangeControls();
     if (state.settings.view === 'chart') renderChart();
-    else if (state.settings.view === 'table' || state.settings.view === 'compare') renderTable();
+    else if (['table', 'compare', 'scatter'].includes(state.settings.view)) renderTable();
     else renderTimelineInner();
   } catch (err) {
     console.error('renderTimeline crashed:', err);
@@ -3952,16 +4127,21 @@ const EXPLAIN = {
   n: 'Aantal posts in de gekozen periode',
   perHour: 'Posts per actief uur; pauzes van meer dan 2 uur tellen niet mee',
   regularity: '100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen',
-  medianGap: 'Mediane tijd tussen twee opeenvolgende posts',
   maxGap: 'Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee',
   medianWords: 'Mediaan aantal woorden per post, kop en tekst samen',
-  shortShare: 'Aandeel posts korter dan 40 woorden',
-  longShare: 'Aandeel posts langer dan 150 woorden',
-  image: MEDIA_EXPLAIN, video: MEDIA_EXPLAIN, social: MEDIA_EXPLAIN, dataviz: MEDIA_EXPLAIN, noMedia: MEDIA_EXPLAIN,
+  image: MEDIA_EXPLAIN, video: MEDIA_EXPLAIN, social: MEDIA_EXPLAIN, dataviz: MEDIA_EXPLAIN,
   media: 'Aandeel posts met foto, video, social embed of datavisualisatie',
   link: 'Aandeel posts met minstens één link naar een eigen artikel (gratis of premium)',
   premium: 'Aandeel posts met een link naar een eigen premium-artikel',
   external: 'Aandeel posts met minstens één link naar een andere site',
+  firstShare: 'Aandeel van alle gedeelde nieuwsmomenten waarin deze titel als eerste post',
+  coverShare: 'Aandeel van alle gedeelde nieuwsmomenten dat deze titel in het liveblog brengt',
+  medianLag: 'Mediaan aantal minuten na de eerste post, als de titel volgt',
+  headQuote: 'Aandeel koppen met aanhalingstekens',
+  statements: 'Aandeel zinnen met aanhalingstekens of een werkwoord als zegt, stelt of schrijft',
+  sourced: 'Aandeel posts dat een persbureau noemt of een bron opvoert (volgens, meldt, laat weten); fotobijschriften en ondertekening tellen niet mee',
+  urgency: 'Woorden als zojuist, op dit moment, spannend en cruciaal, per 1.000 woorden',
+  ownAngle: 'Nederland, België, Vlaanderen, Brussel, Den Haag, Europa, EU en NAVO, per 1.000 woorden',
   reachViews: 'Weergaven van de liveblog, opgeteld over de uren',
   reachUsers: 'Gebruikers per uur, opgeteld; geen unieke gebruikers',
   reachVpu: 'Weergaven gedeeld door gebruikers',
@@ -4085,15 +4265,26 @@ function renderChart() {
   const comboTitle = !comboTitles?.length ? ''
     : comboTitles.includes(s.comboTitle) ? s.comboTitle : [...comboTitles].sort((a, b) => postsOf(b) - postsOf(a))[0];
   const comboPosts = comboTitle ? postsOf(comboTitle) : 0;
+  const textTm = !combo && !reachKey && m.title && TEXT_MEASURES[s.chartMeasure]
+    && !(s.chartType === 'bars' && TEXT_MEASURES[s.chartMeasure].bars === false)
+    && !(TEXT_MEASURES[s.chartMeasure].moments && !m.brand) ? TEXT_MEASURES[s.chartMeasure] : null;
+  if (textTm?.moments) {
+    // zelfde titelsleutel als de tabel, zodat de berekening uit de cache komt
+    const keyOf = (it) => it.row[m.brand] || '\u2014';
+    const shared = sharedMoments(items, keyOf);
+    chartRole = (it) => shared.roles.get(momentKey(it, keyOf)) || null;
+  }
   const heatMode = reachKey ? (reachKey === '__vpu' ? 'ratio' : 'sum')
-    : s.chartType === 'heatmap' && s.chartMeasure === '__words' ? 'words'
-      : s.chartType === 'heatmap' && s.chartMeasure === '__regularity' ? 'regularity' : 'sum';
+    : textTm && s.chartType !== 'bars' ? 'level'
+      : s.chartType === 'heatmap' && s.chartMeasure === '__words' ? 'words'
+        : s.chartType === 'heatmap' && s.chartMeasure === '__regularity' ? 'regularity' : 'sum';
   const measure = heatMode === 'sum' && !reachKey ? state.metrics.find(mt => mt.id === s.chartMeasure && mt.column && mt.format !== 'percent') : null;
-  const weight = (it) => measure ? (parseNumber(it.row[measure.column]) || 0) : 1;
+  const weight = (it) => textTm ? (textTm.test(it) ? 1 : 0) : measure ? (parseNumber(it.row[measure.column]) || 0) : 1;
   const measureLabel = reachKey ? REACH_MEASURES[reachKey]
-    : heatMode === 'words' ? 'Woorden per post (mediaan)'
-      : heatMode === 'regularity' ? 'Regelmaat (0\u2013100)'
-        : measure ? (measure.label || measure.column) : 'Posts';
+    : textTm ? (heatMode === 'level' ? textTm.rate : `Posts ${textTm.post.startsWith('als ') ? '' : 'met '}${textTm.post}`)
+      : heatMode === 'words' ? 'Woorden per post (mediaan)'
+        : heatMode === 'regularity' ? 'Regelmaat (0\u2013100)'
+          : measure ? (measure.label || measure.column) : 'Posts';
   const titleCount = new Set(reachKey ? reach.map(r => r.title) : items.map(it => m.brand ? it.row[m.brand] : '')).size;
   setSlideHead(comboTitles ? `Posts en ${measureLabel.toLowerCase()} per uur`
     : s.chartType === 'heatmap' ? `${measureLabel} per uur en titel` : `${measureLabel} per uur`, [
@@ -4152,8 +4343,15 @@ function renderChart() {
   const reachValue = (c) => !c ? null : reachKey === '__views' ? c.views : reachKey === '__users' ? c.users
     : reachKey === '__vpp' ? (c.posts ? c.views / c.posts : null) : (c.users ? c.views / c.users : null);
   const reachAt = (name, i) => reachValue(reachCells.get(`${name}|${i}`));
+  // tekst per uur: aandeel of dichtheid uit de posts van die titel in dat uur
+  const textRows = new Map();
+  if (heatMode === 'level') items.forEach(it => {
+    const k = `${brandCol ? it.row[brandCol] : 'Updates'}|${bucketOf(it.minutes)}`;
+    textRows.set(k, [...(textRows.get(k) || []), it]);
+  });
+  const textAt = (name, i) => textValue(textTm, textRows.get(`${name}|${i}`) || []);
   if (s.chartType === 'heatmap') {
-    renderHeatmap(view, { names, hours, items, bucketOf, brandCol, absolute, localOf, isLocalMidnight, fixedH, weight, measureLabel, mode: heatMode, cell: reachKey ? reachAt : null, icons: !!(brandCol || reachKey) });
+    renderHeatmap(view, { names, hours, items, bucketOf, brandCol, absolute, localOf, isLocalMidnight, fixedH, weight, measureLabel, mode: heatMode, cell: reachKey ? reachAt : heatMode === 'level' ? textAt : null, icons: !!(brandCol || reachKey) });
     return;
   }
   const brandColor = (name, i) => state.brands[name]?.color || PALETTE[i % PALETTE.length];
@@ -4196,6 +4394,12 @@ function renderChart() {
       const cells = hours.map((_, i) => reachCells.get(`${se.name}|${i}`)).filter(Boolean);
       const sum = (k) => cells.reduce((a, c) => a + c[k], 0);
       se.total = reachValue({ views: sum('views'), users: sum('users'), posts: sum('posts') }) || 0;
+    });
+  } else if (heatMode === 'level') {
+    series.forEach(se => {
+      se.points = hours.map((_, i) => textAt(se.name, i));
+      se.counts = se.points.map(v => v || 0);
+      se.total = textValue(textTm, items.filter(it => se.test(it))) || 0;
     });
   } else {
     items.forEach(it => {
@@ -5030,7 +5234,7 @@ function downloadCsv(name, header, rows) {
 /** Vergelijking: de tabel; grafiek: per titel per uur; tijdlijn: alle posts met afgeleide kenmerken. */
 function exportCsv() {
   const m = state.mapping, view = state.settings.view || 'timeline';
-  if (view === 'table' || view === 'compare') {
+  if (view === 'table' || view === 'compare' || view === 'scatter') {
     if (!compareExport) return toast('Nog geen vergelijking om te exporteren.');
     return downloadCsv('vergelijking', compareExport.header, compareExport.rows);
   }
@@ -5077,7 +5281,8 @@ function exportCsv() {
     return [
       title, r.liveblog_titel || d?.label || '', d?.sourceUrl || (m.articleUrl ? r[m.articleUrl] : '') || '', r.update_nummer || '',
       timeInputLabel(it.minutes), m.title ? r[m.title] : '', m.body ? r[m.body] || '' : '',
-      words, lengthClass(words), mediaCategory(r, m.image) || 'geen',
+      words, lengthClass(words), (sl => sl.length ? Math.round(10 * sl.reduce((a, b) => a + b, 0) / sl.length) / 10 : null)(sentenceLengths(r)),
+      mediaCategory(r, m.image) || 'geen',
       m.image && isHttpUrl(r[m.image]) ? r[m.image] : '', isVideoRow(r) ? 'ja' : '', socialOf(r), isDatavizRow(r) ? 'ja' : '',
       links.length, links.join(' '), { premium: 'eigen premium', own: 'eigen', external: 'uitgaand' }[linkInfo(r).cls] || '',
       isLinkPremiumRow(r) ? 'ja' : '', m.premium && isPremium(r[m.premium]) ? 'ja' : '',
@@ -5085,7 +5290,7 @@ function exportCsv() {
       ...metrics.map(mt => parseNumber(r[mt.column]))
     ];
   });
-  downloadCsv('posts', ['Titel', 'Liveblog', 'Liveblog-URL', 'Postnummer', 'Tijd', 'Kop', 'Tekst', 'Woorden', 'Lengte', 'Media',
+  downloadCsv('posts', ['Titel', 'Liveblog', 'Liveblog-URL', 'Postnummer', 'Tijd', 'Kop', 'Tekst', 'Woorden', 'Lengte', 'Woorden per zin', 'Media',
     'Foto-URL', 'Video', 'Social', 'Datavisualisatie', 'Aantal links', 'Links', 'Soort link', 'Link naar premium', 'Premium',
     'Minuten sinds vorige', 'Blokken', 'Embed-bronnen', ...metrics.map(mt => mt.label || mt.column)], rows);
 }
@@ -5132,6 +5337,7 @@ function applyState(parsed) {
   if (!['modern', 'compact'].includes(state.settings.cardStyle)) state.settings.cardStyle = 'modern';
   // vroeger zaten de vergelijkingsgrafieken onder de tabelknop
   if (state.settings.view === 'table' && state.settings.compareShow && state.settings.compareShow !== 'table') state.settings.view = 'compare';
+  if (state.settings.view === 'text') Object.assign(state.settings, { view: 'table', tableShow: 'speed' });
   if (!state.datasets.length && state.rows.length) {
     const legacyId = crypto.randomUUID();
     state.datasets = [{ id: legacyId, label: 'Data', kind: 'table', rowCount: state.rows.length, active: true }];
@@ -5212,15 +5418,16 @@ function renderTable() {
 
   // per titel (merk), over alle actieve datasets heen; zonder merkkolom per dataset
   const groupMap = new Map();
+  const keyOf = (it) => m.brand ? (it.row[m.brand] || '\u2014') : (state.datasets.find(d => d.id === it.row.__datasetId)?.label || 'Data');
   items.forEach(it => {
-    const key = m.brand ? (it.row[m.brand] || '\u2014') : (state.datasets.find(d => d.id === it.row.__datasetId)?.label || 'Data');
+    const key = keyOf(it);
     if (!groupMap.has(key)) groupMap.set(key, []);
     groupMap.get(key).push(it);
   });
   const groups = [...groupMap].map(([key, list]) => ({ key, items: list }));
-
   const counts = [`${groups.length} titel${groups.length === 1 ? '' : 's'}`, `${items.length} posts`];
-  setSlideHead('Liveblogs in cijfers', [periodText(start, end), ...counts]);
+  const axis = TABLE_AXES[s.tableShow] ? s.tableShow : 'speed';
+  setSlideHead(s.view === 'table' ? TABLE_AXES[axis].title : 'Liveblogs in cijfers', [periodText(start, end), ...counts]);
 
   const fixedH = STAT_FORMAT_H;
   const ready = !!(m.time && groups.length);
@@ -5266,11 +5473,8 @@ function renderTable() {
       // frequentie: posts per uur actieve tijd (pauzes > 2 uur tellen niet mee)
       perHour: activeMinutes >= 30 ? rows.length / (activeMinutes / 60) : null,
       regularity: regularityScore(sessionGaps),
-      medianGap: median(sessionGaps),
       maxGap: sessionGaps.length ? Math.max(...sessionGaps) : null,
       medianWords: median(words),
-      shortShare: pct(lengths.filter(l => l === 'kort').length, rows.length),
-      longShare: pct(lengths.filter(l => l === 'lang').length, rows.length),
       stackLength: {
         kort: lengths.filter(l => l === 'kort').length,
         middel: lengths.filter(l => l === 'middel').length,
@@ -5283,7 +5487,6 @@ function renderTable() {
       video: m.video ? share('video') : null,
       social: m.social ? share('social') : null,
       dataviz: m.dataviz ? share('dataviz') : null,
-      noMedia: m.image || m.video || m.social || m.dataviz ? share('') : null,
       media: m.image || m.video || m.social || m.dataviz ? 1 - share('') : null,
       stackLinks: {
         premium: linkCount('premium'),
@@ -5298,6 +5501,7 @@ function renderTable() {
         photo: cats.filter(c => c === 'foto').length,
         none: cats.filter(c => c === '').length
       },
+      ...textStats(rows),
       ...metricStats
     };
   };
@@ -5313,25 +5517,30 @@ function renderTable() {
     return `${day ? day + ' ' : ''}${timeLabel(t)}`;
   };
   const fmtNum = (v) => v === null ? '\u2013' : String(Math.round(v));
+  const fmtDec = (v) => v === null || v === undefined ? '\u2013' : v.toFixed(1).replace('.', ',');
   // better: welke kant 'beter' is, om de koploper per kolom te markeren
   const COLS = [
     { key: 'n', label: 'Posts', fmt: (v) => String(v), better: 'high' },
     { key: 'perHour', label: 'Frequentie (per actief uur)', fmt: (v) => v === null ? '\u2013' : v.toFixed(1).replace('.', ','), better: 'high' },
     { key: 'regularity', label: 'Regelmaat (0\u2013100)', fmt: fmtNum, better: 'high' },
-    { key: 'medianGap', label: 'Mediane tussentijd', fmt: fmtDur, better: 'low' },
     { key: 'maxGap', label: 'Langste stilte', fmt: fmtDur, better: 'low' },
     { key: 'medianWords', label: 'Woorden (mediaan)', fmt: fmtNum, better: null },
-    { key: 'shortShare', label: 'Kort (<40)', fmt: fmtPct, better: null },
-    { key: 'longShare', label: 'Lang (>150)', fmt: fmtPct, better: null },
     { key: 'image', label: 'Met foto', fmt: fmtPct, better: 'high' },
     { key: 'video', label: 'Met video', fmt: fmtPct, better: 'high' },
     { key: 'social', label: 'Met social embed', fmt: fmtPct, better: 'high' },
     { key: 'dataviz', label: 'Met datavisualisatie', fmt: fmtPct, better: 'high' },
-    { key: 'noMedia', label: 'Geen media', fmt: fmtPct, better: null },
     { key: 'media', label: 'Met media', fmt: fmtPct, better: 'high' },
     { key: 'link', label: 'Met eigen link', fmt: fmtPct, better: 'high' },
     { key: 'premium', label: 'Met premium-link', fmt: fmtPct, better: null },
-    { key: 'external', label: 'Met uitgaande link', fmt: fmtPct, better: null }
+    { key: 'external', label: 'Met uitgaande link', fmt: fmtPct, better: null },
+    { key: 'firstShare', label: 'Als eerste bij gedeeld nieuws', fmt: fmtPct, better: 'high' },
+    { key: 'coverShare', label: 'Gedeeld nieuws gebracht', fmt: fmtPct, better: 'high' },
+    { key: 'medianLag', label: 'Achterstand als volger', fmt: fmtDur, better: 'low' },
+    { key: 'headQuote', label: 'Citaat in de kop', fmt: fmtPct, better: null },
+    { key: 'statements', label: 'Zinnen met een uitspraak', fmt: fmtPct, better: null },
+    { key: 'sourced', label: 'Met bronvermelding', fmt: fmtPct, better: 'high' },
+    { key: 'urgency', label: 'Urgentietaal (per 1.000 woorden)', fmt: fmtDec, better: null },
+    { key: 'ownAngle', label: 'Eigen land of Europa (per 1.000 woorden)', fmt: fmtDec, better: null }
   ];
   // cijfers per titel: totaal, gemiddelde en mediaan per artikel
   state.metrics.filter(mt => mt.column).forEach(mt => {
@@ -5350,6 +5559,17 @@ function renderTable() {
     const title = m.brand ? g.key : '';
     return { title, label: g.key, stats: statsOf(g.items) };
   }).sort((a, b) => b.stats.n - a.stats.n);
+  // gedeelde nieuwsmomenten: alleen zinvol met minstens twee titels
+  const shared = groups.length > 1 && m.title ? sharedMoments(items, keyOf) : null;
+  rowsData.forEach(r => {
+    const p = shared?.per.get(r.label) || { first: 0, follow: 0, lags: [] };
+    const ok = !!shared?.moments;
+    Object.assign(r.stats, {
+      firstShare: ok ? p.first / shared.moments : null,
+      coverShare: ok ? (p.first + p.follow) / shared.moments : null,
+      medianLag: ok ? medianOf(p.lags) : null
+    });
+  });
   // bereik per titel binnen hetzelfde venster
   const reachIn = reachRows().filter(r => r.t >= start && inEnd(r.t));
   rowsData.forEach(r => {
@@ -5413,11 +5633,15 @@ function renderTable() {
   };
   // korte, neutrale grafiektitels
   const CHART_TITLES = {
-    n: 'Posts', perHour: 'Frequentie (posts per actief uur)', regularity: 'Regelmaat (0\u2013100)', medianGap: 'Tussentijd (mediaan)',
-    maxGap: 'Langste stilte', medianWords: 'Woorden per post (mediaan)', shortShare: 'Aandeel korte posts', longShare: 'Aandeel lange posts',
+    n: 'Posts', perHour: 'Frequentie (posts per actief uur)', regularity: 'Regelmaat (0\u2013100)',
+    maxGap: 'Langste stilte', medianWords: 'Woorden per post (mediaan)',
     image: 'Aandeel met foto', video: 'Aandeel met video', social: 'Aandeel met social embed', dataviz: 'Aandeel met datavisualisatie',
-    noMedia: 'Aandeel zonder media', media: 'Aandeel met media', link: 'Aandeel met eigen link', premium: 'Aandeel met premium-link',
+    media: 'Aandeel met media', link: 'Aandeel met eigen link', premium: 'Aandeel met premium-link',
     external: 'Aandeel met uitgaande link',
+    firstShare: 'Als eerste bij gedeeld nieuws', coverShare: 'Gedeeld nieuws gebracht', medianLag: 'Achterstand als volger (mediaan)',
+    headQuote: 'Aandeel koppen met citaat',
+    statements: 'Aandeel zinnen met een uitspraak', sourced: 'Aandeel posts met bronvermelding',
+    urgency: 'Urgentietaal per 1.000 woorden', ownAngle: 'Eigen land of Europa per 1.000 woorden',
     reachViews: 'Weergaven', reachUsers: 'Gebruikers', reachVpu: 'Weergaven per gebruiker', viewsPerPost: 'Weergaven per update'
   };
   const chartTitleOf = (c) => CHART_TITLES[c.key] || c.chartTitle;
@@ -5427,7 +5651,7 @@ function renderTable() {
     : k === 'stack-media' ? !!(m.image || m.video || m.social || m.dataviz) : true);
   const chartOptions = availableStacks.map(([k, st]) => [k, `${st.label} per titel`])
     .concat(chartCols.map(c => [c.key, `${chartTitleOf(c)} per titel`]));
-  const optionHtml = chartOptions.map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('');
+  const optionHtml = optgroups(chartOptions);
   const showSel = $('#compareShow'), show2Sel = $('#compareShow2');
   showSel.innerHTML = optionHtml;
   show2Sel.innerHTML = '<option value="">\u2014 geen \u2014</option>' + optionHtml;
@@ -5437,6 +5661,29 @@ function renderTable() {
   showSel.value = show;
   show2Sel.value = show2;
   $('#compareShow2Field').hidden = show === 'table';
+
+  if (s.view === 'scatter') {
+    const has = (k) => chartCols.some(c => c.key === k);
+    const xKey = has(s.scatterX) ? s.scatterX : has('perHour') ? 'perHour' : chartCols[0]?.key;
+    // standaard een prestatiemaat op de y-as als er bereikdata is
+    const yKey = has(s.scatterY) && s.scatterY !== xKey ? s.scatterY
+      : ['viewsPerPost', 'reachVpu', 'medianWords'].find(k => has(k) && k !== xKey) || chartCols.find(c => c.key !== xKey)?.key;
+    const opts = optgroups(chartCols.map(c => [c.key, chartTitleOf(c)]));
+    $('#scatterX').innerHTML = opts;
+    $('#scatterY').innerHTML = opts;
+    $('#scatterX').value = xKey || '';
+    $('#scatterY').value = yKey || '';
+    setSlideHead('Liveblogs vergeleken', [periodText(start, end), ...counts]);
+    $('#previewInfo').textContent = `${groups.length} titel${groups.length === 1 ? '' : 's'} in spreidingsdiagram`;
+    const headH = $('#slideHead').hidden ? 0 : $('#slideHead').offsetHeight;
+    const H = Math.max(320, fixedH - PAD_TOP - PAD_BOTTOM - headH - 24);
+    const cx = chartCols.find(c => c.key === xKey), cy = chartCols.find(c => c.key === yKey);
+    view.innerHTML = cx && cy ? compareScatterHtml(rowsData, cx, cy, chartTitleOf(cx), chartTitleOf(cy), H) : '';
+    $('#slide').style.height = fixedH + 'px';
+    applyZoom();
+    $('#sizeHint').textContent = `Afbeelding wordt ${SLIDE_W} \u00d7 ${Math.round($('#slide').offsetHeight)} px`;
+    return;
+  }
 
   if (show !== 'table') {
     const spec = (key) => ({
@@ -5461,14 +5708,16 @@ function renderTable() {
     return;
   }
 
-  // alle kengetallen van de posts; bereik staat alleen in de vergelijking en de CSV
-  const NOT_IN_TABLE = new Set(['media', 'shortShare', 'longShare', 'noMedia', 'reachViews', 'reachUsers', 'reachVpu', 'viewsPerPost']);
-  const tcols = cols.filter(c => !NOT_IN_TABLE.has(c.key));
+  // drie tabellen zonder overlap; bereik staat alleen in vergelijking, spreiding en CSV; eigen cijfers bij snelheid
+  const tcols = cols.filter(c => TABLE_AXES[axis].keys.includes(c.key) || (axis === 'speed' && /^m_/.test(c.key)))
+    .sort((a, b) => (/^m_/.test(a.key) ? 999 : axisRank(a.key)) - (/^m_/.test(b.key) ? 999 : axisRank(b.key)));
   // korte kolomnamen in één stijl; de volledige uitleg staat in de tooltip
   const TABLE_HEAD = {
-    n: 'Posts', perHour: 'Frequentie', regularity: 'Regelmaat', medianGap: 'Tussentijd', maxGap: 'Langste stilte',
+    n: 'Posts', perHour: 'Frequentie', regularity: 'Regelmaat', maxGap: 'Langste stilte',
     medianWords: 'Woorden', image: 'Foto', video: 'Video', social: 'Social', dataviz: 'Visualisatie',
-    link: 'Eigen link', premium: 'Premium-link', external: 'Uitgaand'
+    link: 'Eigen link', premium: 'Premium-link', external: 'Uitgaand',
+    firstShare: 'Als eerste', coverShare: 'Gebracht', medianLag: 'Achterstand', headQuote: 'Citaatkop',
+    statements: 'Uitspraken', sourced: 'Bron', urgency: 'Urgentie', ownAngle: 'Eigen hoek'
   };
   const headOf = (c) => {
     const metric = c.key.match(/^m_(.+)_(sum|avg|med)$/);
@@ -5502,6 +5751,31 @@ function renderTable() {
 }
 
 // grafiekkleuren: rustige M3-tonen i.p.v. merkkleuren (de favicon in de legenda koppelt kleur aan titel)
+const TABLE_AXES = {
+  speed: { label: 'Snelheid en ritme', title: 'Snelheid en ritme per liveblog',
+    keys: ['n', 'perHour', 'regularity', 'maxGap', 'firstShare', 'coverShare', 'medianLag'] },
+  form: { label: 'Vorm', title: 'Vorm van de liveblogs', keys: ['medianWords', 'media', 'image', 'video', 'social', 'dataviz'] },
+  content: { label: 'Inhoud', title: 'Inhoud van de liveblogs',
+    keys: ['sourced', 'statements', 'headQuote', 'urgency', 'ownAngle', 'link', 'premium', 'external'] }
+};
+const STACK_AXIS = { 'stack-length': 'form', 'stack-media': 'form', 'stack-links': 'content' };
+// volgorde binnen een as: gestapelde grafiek eerst, dan de kengetallen zoals in de tabel
+const axisRank = (k) => {
+  const axis = STACK_AXIS[k] || Object.keys(TABLE_AXES).find(a => TABLE_AXES[a].keys.includes(k));
+  return axis ? (STACK_AXIS[k] ? -1 : TABLE_AXES[axis].keys.indexOf(k)) : 0;
+};
+/** Keuzelijst gegroepeerd per as; bereik en eigen cijfers apart. */
+function optgroups(options) {
+  const groupOf = (k) => {
+    const axis = STACK_AXIS[k] || Object.keys(TABLE_AXES).find(a => TABLE_AXES[a].keys.includes(k));
+    return axis ? TABLE_AXES[axis].label : /^reach|^viewsPerPost$/.test(k) ? 'Bereik' : 'Cijfers';
+  };
+  const order = [...Object.values(TABLE_AXES).map(a => a.label), 'Bereik', 'Cijfers'];
+  return order.map(g => {
+    const opts = options.filter(([k]) => groupOf(k) === g).sort(([a], [b]) => axisRank(a) - axisRank(b));
+    return opts.length ? `<optgroup label="${escAttr(g)}">${opts.map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+}
 const M3_SERIES = ['#6750A4', '#7D5260', '#625B71', '#B69DF8', '#E8A6B9', '#A8A0BC', '#4F378B', '#633B4B'];
 // één vaste kleur per categorie, in elke grafiek dezelfde; 'geen' is M3 outline-variant
 const CAT = {
@@ -5577,6 +5851,49 @@ function compareChartHtml(rowsInput, stack, col, title, explain = '') {
     </div>`;
 }
 
+/** Spreidingsdiagram per titel: x en y zijn twee kengetallen, bolgrootte = aantal posts. */
+function compareScatterHtml(rowsInput, colX, colY, titleX, titleY, H) {
+  const rows = rowsInput.filter(r => r.stats[colX.key] !== null && r.stats[colX.key] !== undefined && r.stats[colY.key] !== null && r.stats[colY.key] !== undefined);
+  const scale = (vals) => {
+    const maxVal = Math.max(...vals, 0) * 1.08 || 1;
+    const raw = maxVal / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(v => raw <= v) || 10 * mag;
+    const max = Math.ceil(maxVal / step) * step;
+    const ticks = [];
+    for (let v = 0; v <= max + step / 2; v += step) ticks.push(v);
+    return { max, ticks };
+  };
+  const sx = scale(rows.map(r => r.stats[colX.key])), sy = scale(rows.map(r => r.stats[colY.key]));
+  const nMax = Math.max(...rows.map(r => r.stats.n), 1);
+  // plotmaat in pixels voor het plaatsen van labels zonder overlap
+  const W = SLIDE_W - 2 * PAD_X - 220, PH = H - 150;
+  const pts = rows.map(r => {
+    const size = 46 + 34 * Math.sqrt(r.stats.n / nMax);
+    return { r, size, x: W * r.stats[colX.key] / sx.max, y: PH * r.stats[colY.key] / sy.max };
+  }).sort((a, b) => b.size - a.size);
+  const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  const placed = [];
+  const bubbles = pts.map(p => [p.x - p.size / 2, p.y - p.size / 2, p.x + p.size / 2, p.y + p.size / 2]);
+  const labels = pts.map((p, i) => {
+    const name = p.r.title || p.r.label, w = 11 * name.length + 10, h = 28, g = p.size / 2 + 8;
+    const opts = [['r', p.x + g, p.y - h / 2], ['l', p.x - g - w, p.y - h / 2], ['t', p.x - w / 2, p.y + g], ['b', p.x - w / 2, p.y - g - h]]
+      .map(([side, x0, y0]) => ({ side, box: [x0, y0, x0 + w, y0 + h] }));
+    const pick = opts.find(o => !placed.some(b => hit(o.box, b)) && !bubbles.some((b, j) => j !== i && hit(o.box, b))) || opts[0];
+    placed.push(pick.box);
+    return `<div class="sc-name" style="left:${pick.box[0]}px;bottom:${pick.box[1]}px">${esc(name)}</div>`;
+  });
+  const fmtX = colX.fmt, fmtY = colY.fmt;
+  const grid = sy.ticks.map(v => `<div class="sc-gy" style="bottom:${100 * v / sy.max}%"></div><div class="sc-ty" style="bottom:${100 * v / sy.max}%">${esc(fmtY(v))}</div>`).join('')
+    + sx.ticks.map(v => `<div class="sc-gx" style="left:${100 * v / sx.max}%"></div><div class="sc-tx" style="left:${100 * v / sx.max}%">${esc(fmtX(v))}</div>`).join('');
+  const dots = pts.map(p => `<div class="sc-pt" style="left:${p.x}px;bottom:${p.y}px;width:${p.size}px;height:${p.size}px" title="${escAttr(`${p.r.title || p.r.label}: ${fmtX(p.r.stats[colX.key])} · ${fmtY(p.r.stats[colY.key])}`)}">${titleIconHtml(p.r.title, 'sc-logo')}</div>`).join('');
+  return `<div class="compare-scatter" style="height:${H}px">
+    <h3 class="cc-title">${esc(titleY)} tegenover ${esc(titleX.charAt(0).toLowerCase() + titleX.slice(1))}</h3>
+    <div class="sc-body"><div class="sc-ylab">${esc(titleY)}</div>
+      <div class="sc-plot" style="width:${W}px;height:${PH}px">${grid}${dots}${labels.join('')}</div></div>
+    <div class="sc-xlab">${esc(titleX)} · bolgrootte = aantal posts</div>
+  </div>`;
+}
+
 function syncControls() {
   const s = state.settings;
 
@@ -5615,19 +5932,36 @@ function syncControls() {
   if (comboNames.includes(s.comboTitle)) $('#comboTitle').value = s.comboTitle;
   $('#comboTitleField').hidden = s.view !== 'chart' || !combo || !comboOk;
   const sumMetrics = state.metrics.filter(mt => mt.column && mt.format !== 'percent');
-  const heatOnly = s.chartType === 'heatmap'
-    ? '<option value="__words">woorden per post (mediaan)</option><option value="__regularity">regelmaat</option>' : '';
+  const heatOnly = s.chartType === 'heatmap';
+  const TEXT_ORDER = ['__tfirst', '__tlag', '__tsource', '__tstate', '__tquote', '__turgency', '__town'];
+  const textMeasures = (state.mapping.title && !combo ? Object.entries(TEXT_MEASURES)
+    .filter(([, t]) => !(s.chartType === 'bars' && t.bars === false) && !(t.moments && !state.mapping.brand)) : [])
+    .sort(([a], [b]) => TEXT_ORDER.indexOf(a) - TEXT_ORDER.indexOf(b));
+  // tekst: staven tellen posts met het kenmerk, lijn en heatmap tonen het aandeel of de dichtheid per uur
+  const textLabel = ([k, t]) => [k, s.chartType === 'bars' ? `posts ${t.post.startsWith('als ') ? '' : 'met '}${t.post}` : t.rate.toLowerCase()];
   const reachOpts = s.chartType !== 'bars' && reachRows().length
     ? Object.entries(REACH_MEASURES).map(([k, label]) => `<option value="${k}">${esc(label.toLowerCase())}</option>`).join('') : '';
-  // combinatie: posts staan altijd als staven, de keuze gaat over de lijn
-  $('#chartMeasure').innerHTML = combo ? reachOpts : '<option value="">aantal artikelen</option>'
-    + sumMetrics.map(mt => `<option value="${escAttr(mt.id)}">som van ${esc(mt.label || mt.column)}</option>`).join('') + reachOpts + heatOnly;
+  const group = (label, html) => html ? `<optgroup label="${label}">${html}</optgroup>` : '';
+  const opt = ([k, label]) => `<option value="${k}">${esc(label)}</option>`;
+  // zelfde indeling en volgorde als de tabellen; combinatie: posts staan altijd als staven, de keuze gaat over de lijn
+  const speedOpts = ['<option value="">aantal artikelen</option>']
+    .concat(heatOnly ? [opt(['__regularity', 'regelmaat'])] : [], textMeasures.filter(([, t]) => t.axis === 'speed').map(textLabel).map(opt)).join('');
+  const formOpts = (heatOnly ? [opt(['__words', 'woorden per post (mediaan)'])] : []).join('');
+  const contentOpts = textMeasures.filter(([, t]) => t.axis === 'content').map(textLabel).map(opt).join('');
+  const numberOpts = sumMetrics.map(mt => opt([mt.id, `som van ${mt.label || mt.column}`])).join('');
+  $('#chartMeasure').innerHTML = combo ? reachOpts
+    : group('Snelheid en ritme', speedOpts) + group('Vorm', formOpts) + group('Inhoud', contentOpts) + group('Bereik', reachOpts) + group('Cijfers', numberOpts);
+  const textOpts = textMeasures.length ? 'x' : '';
   $('#chartMeasure').value = [...$('#chartMeasure').options].some(o => o.value === s.chartMeasure) ? s.chartMeasure : combo ? '__users' : '';
-  $('#chartMeasureField').hidden = s.view !== 'chart' || (!sumMetrics.length && !heatOnly && !reachOpts);
+  $('#chartMeasureField').hidden = s.view !== 'chart' || (!sumMetrics.length && !heatOnly && !reachOpts && !textOpts);
   $('#chartTypeField').hidden = s.view !== 'chart';
   $('#chartColorField').hidden = s.view !== 'chart' || ['heatmap', 'line', 'combo'].includes(s.chartType);
   $('#compareShowField').hidden = s.view !== 'compare';
   $('#compareShow2Field').hidden = s.view !== 'compare';
+  $('#tableShowField').hidden = s.view !== 'table';
+  $('#scatterXField').hidden = s.view !== 'scatter';
+  $('#scatterYField').hidden = s.view !== 'scatter';
+  $('#tableShow').value = TABLE_AXES[s.tableShow] ? s.tableShow : 'speed';
   $$('.view-btn[data-view]').forEach(btn => {
     const on = btn.dataset.view === (s.view || 'timeline');
     btn.classList.toggle('on', on);
@@ -5751,6 +6085,9 @@ function bind() {
   bindSetting('#slideFormat', 'format');
   bindSetting('#compareShow', 'compareShow');
   bindSetting('#compareShow2', 'compareShow2');
+  bindSetting('#tableShow', 'tableShow');
+  bindSetting('#scatterX', 'scatterX');
+  bindSetting('#scatterY', 'scatterY');
   bindSetting('#chartType', 'chartType');
   bindSetting('#chartMeasure', 'chartMeasure');
   bindSetting('#comboTitle', 'comboTitle');

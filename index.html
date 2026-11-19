@@ -11,7 +11,7 @@
 <script src="https://unpkg.com/lucide@latest"></script>
 <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
 <script src="lib/gif.js?v=20261116b"></script>
-<link rel="stylesheet" href="styles.css?v=20261119c">
+<link rel="stylesheet" href="styles.css?v=20261119d">
 </head>
 <body>
 
@@ -237,7 +237,6 @@
           <dt>Posts</dt><dd>Aantal posts in de gekozen periode.</dd>
           <dt>Frequentie</dt><dd>Posts per actief uur. Pauzes van meer dan 2 uur tellen niet mee.</dd>
           <dt>Regelmaat</dt><dd>0–100: 100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen. Pas vanaf 20 posts binnen actieve periodes.</dd>
-          <dt>Tussentijd</dt><dd>Mediane tijd tussen twee opeenvolgende posts binnen een actieve periode.</dd>
           <dt>Langste stilte</dt><dd>Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee.</dd>
           <dt>Woorden</dt><dd>Kop en tekst samen. Kort &lt; 40, middel 40–150, lang &gt; 150.</dd>
           <dt>Link</dt><dd>Minstens één link naar een artikel. Social, grafiekdiensten, bestanden en eigen embeds tellen niet mee. Links naar de eigen site (zelfde domein als de liveblog) zijn eigen artikelen, gratis of premium; links naar andere sites zijn uitgaand. In grafieken krijgt elke post één soort: eigen premium gaat voor eigen gratis, eigen gratis voor uitgaand.</dd>
@@ -250,6 +249,17 @@
           <dt>Datavisualisatie</dt><dd>Embeds van Datawrapper, Flourish, Infogram, LocalFocus, AP-uitslagen en andere grafiekdiensten, plus eigen widgets van de site (bv. AD-kaarten, HLN-prognosetool). Bij DPG-titels telt ook een afbeelding in PNG-formaat mee: persfoto's zijn JPEG, grafieken en graphics PNG.</dd>
           <dt>Social embed</dt><dd>X, Instagram, YouTube, TikTok, Facebook, Bluesky, Threads, LinkedIn, Truth Social.</dd>
           <dt>Foto</dt><dd>Minstens één afbeelding in de post. Auteursfoto's, logo's en iconen tellen niet mee.</dd>
+        </dl>
+
+        <div class="sub-head"><h3>Tekst</h3></div>
+        <p>De tekstmaten werken voor elke Nederlandstalige liveblog, los van het onderwerp. Ze tellen vaste patronen en woorden; het blijven indicaties. Posts zonder kop of tekst ('Liveblog update') tellen bij de kopmaten niet mee. Ze staan in Tabel (Toon: snelheid en ritme, vorm of inhoud), in Vergelijking en per uur: de staafgrafiek telt posts met het kenmerk, lijn en heatmap tonen het aandeel of de dichtheid (pas vanaf 3 posts in dat uur). Per uur kan ook gedeeld nieuws: posts die als eerste kwamen (staven), het aandeel eerste en de mediane achterstand als volger (lijn en heatmap). In Vergelijking kunnen twee kengetallen naast elkaar; Spreiding zet er twee tegen elkaar uit (bolgrootte = aantal posts), het liefst met een bereikmaat op de y-as.</p>
+        <dl>
+          <dt>Gedeeld nieuws</dt><dd>Posts van verschillende titels die binnen 3 uur inhoudelijk op elkaar lijken (woordvergelijking van kop en begin van de tekst) vormen samen een nieuwsmoment. Per titel: hoe vaak als eerste, welk deel van alle momenten in het liveblog staat en de mediane achterstand als volger. Alleen liveblogposts: pushberichten, artikelen en tv vallen erbuiten.</dd>
+          <dt>Citaatkop</dt><dd>Aandeel koppen met een citaat.</dd>
+          <dt>Uitspraken</dt><dd>Aandeel zinnen met aanhalingstekens of een werkwoord als zegt, stelt, schrijft of laat weten.</dd>
+          <dt>Bron</dt><dd>Aandeel posts dat een persbureau noemt of een bron opvoert (volgens, meldt, laat weten, bevestigt). Fotobijschriften en ondertekening als (ANP) tellen niet mee.</dd>
+          <dt>Urgentie</dt><dd>Woorden als zojuist, op dit moment, spannend en cruciaal, per 1.000 woorden. 'Nu' telt ook als voegwoord; vergelijk vooral titels onderling.</dd>
+          <dt>Eigen hoek</dt><dd>Nederland, België, Vlaanderen, Brussel, Den Haag, Europa, EU en NAVO, per 1.000 woorden.</dd>
         </dl>
 
         <div class="sub-head"><h3>Bereik</h3></div>
@@ -286,7 +296,16 @@
         <button type="button" class="view-btn" role="tab" data-view="chart"><span class="ms">show_chart</span>Per uur</button>
         <button type="button" class="view-btn" role="tab" data-view="table"><span class="ms">table</span>Tabel</button>
         <button type="button" class="view-btn" role="tab" data-view="compare"><span class="ms">bar_chart</span>Vergelijking</button>
+        <button type="button" class="view-btn" role="tab" data-view="scatter"><span class="ms">scatter_plot</span>Spreiding</button>
       </div>
+      <label class="view-filter" id="tableShowField" hidden>
+        <span>Toon</span>
+        <select id="tableShow">
+          <option value="speed">snelheid en ritme</option>
+          <option value="form">vorm</option>
+          <option value="content">inhoud</option>
+        </select>
+      </label>
       <label class="view-filter" id="chartTypeField" hidden>
         <span>Type</span>
         <select id="chartType">
@@ -320,6 +339,14 @@
       <label class="view-filter" id="compareShow2Field" hidden>
         <span>Naast</span>
         <select id="compareShow2"></select>
+      </label>
+      <label class="view-filter" id="scatterXField" hidden>
+        <span>X-as</span>
+        <select id="scatterX"></select>
+      </label>
+      <label class="view-filter" id="scatterYField" hidden>
+        <span>Y-as</span>
+        <select id="scatterY"></select>
       </label>
       <div class="stage-info">
         <span class="hint" id="previewInfo">0 tegels</span>
@@ -378,6 +405,6 @@
 
 <script src="logos.js?v=20261116b"></script>
 <script src="favicons.js?v=20261117a"></script>
-<script src="app.js?v=20261119n"></script>
+<script src="app.js?v=20261119v"></script>
 </body>
 </html>

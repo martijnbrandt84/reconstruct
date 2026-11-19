@@ -1,0 +1,70 @@
+{
+  "event": "Midterms",
+  "persoon": "Trump",
+  "inzichten_titel": "Midterms: liveblogs draaiden 's nachts op volle toeren, lezers kwamen 's ochtends",
+  "inzichten": [
+    {"icoon": "clock", "kop": "Liveblogs stil als lezers komen", "titels": ["Trouw"],
+     "tekst": "De meeste posts verschenen 's avonds en 's nachts, maar de meeste lezers kwamen tussen 07:00 en 09:00 uur. Juist dan vielen veel liveblogs stil, ook dat van Trouw."},
+    {"icoon": "moon", "kop": "Nachtlezers bij NU.nl en Trouw", "titels": ["NU.nl", "Trouw"],
+     "tekst": "De liveblogs van NU.nl en Trouw werden 's nachts gelezen door een kleine groep fanatieke gebruikers."},
+    {"auto": "eerste", "kop": "Vlaamse liveblogs het snelst"},
+    {"auto": "tempo", "icoon": "type", "kop": "Telegramstijl tegenover lange updates"},
+    {"icoon": "link", "kop": "Doorlinken naar premium", "titels": ["De Morgen", "Trouw"],
+     "tekst": "De Morgen en Trouw linken vanuit het liveblog het vaakst door naar eigen premium-artikelen."},
+    {"auto": "typen"}
+  ],
+  "bronnen": {
+    "Persbureau": ["ANP", "AP", "Associated Press", "Reuters", "AFP", "Belga", "Bloomberg", "dpa"],
+    "Amerikaanse tv": ["CNN", "NBC(?: News)?", "CBS(?: News)?", "ABC(?: News)?", "Fox(?: News)?", "MSNBC"],
+    "Amerikaanse krant of site": ["(?:The )?New York Times", "NYT", "(?:The )?Washington Post", "Politico", "Wall Street Journal", "WSJ", "Axios", "(?:The )?Guardian", "Texas Tribune", "The Hill", "USA Today"],
+    "Data en peilers": ["Decision Desk(?: HQ)?", "VoteHub", "exitpoll\\w*", "peiling\\w*", "Edison", "projectie\\w*"],
+    "Social media van actoren": ["Truth Social", "op X", "(?:via|op) Instagram", "schreef (?:hij|zij|ze) op", "Truth"],
+    "Eigen verslaggever": ["correspondent\\w*", "verslaggever\\w*", "onze reporter", "ter plaatse"]
+  },
+  "bronnamen": ["CNN", "NBC", "CBS", "ABC", "Fox News", "New York Times", "Washington Post", "Decision Desk", "AP", "ANP", "Reuters", "Belga", "AFP", "Truth Social", "Politico", "Guardian", "VoteHub", "Bloomberg", "Wall Street Journal"],
+  "frames": {
+    "Wedstrijd": {"uitleg": "wint, verliest, verovert", "woorden": ["wint", "winnen", "won", "winst", "verlies\\w*", "verliest", "zege", "overwinning\\w*", "voorsprong", "achterstand", "nek-aan-nek\\w*", "race", "races", "verover\\w*", "kantel\\w*", "flip\\w*", "behoud\\w*", "verslaat", "versloeg", "toss-up"]},
+    "Onzekerheid": {"uitleg": "lijkt, voorspelt, voorlopig", "woorden": ["voorspel\\w*", "lijkt", "lijken", "verwacht\\w*", "mogelijk", "waarschijnlijk", "voorlopig\\w*", "nog niet", "onzeker\\w*", "projectie\\w*", "peiling\\w*", "te vroeg"]},
+    "Dramatisering": {"uitleg": "historisch, klap, aardverschuiving", "woorden": ["aardverschuiving", "mokerslag", "tsunami", "blauwe golf", "monsterzege", "dreun", "klap", "verpletter\\w*", "daverend\\w*", "schok\\w*", "verbijster\\w*", "enorm\\w*", "gigantisch\\w*", "historisch\\w*", "ongekend\\w*", "pijnlijk\\w*"]},
+    "Conflict": {"uitleg": "kritiek, schandaal, haalt uit", "woorden": ["aanval\\w*", "haalt uit", "uithaal", "kritiek", "woede\\w*", "woedend", "ruzie", "tier\\w*", "schandaal", "schandalen", "afstraf\\w*", "botsing", "beschuldig\\w*", "verwijt\\w*", "boos", "aangevallen", "vendetta", "tegenstand"]},
+    "Duiding": {"uitleg": "wat betekent, snel mee, waarom", "woorden": ["waarom", "wat betekent", "betekent", "analyse", "uitleg", "snel mee", "dit weten we", "waar moet je op letten", "om in het oog te houden", "kanttekening", "teken aan de wand", "symbool", "met andere woorden"]}
+  },
+  "eigen_land": ["Nederland\\w*", "Belgi\\w*", "Vlaams\\w*", "Vlaming\\w*", "Leuven\\w*", "Brussel", "Den Haag", "Europ\\w*", "EU", "NAVO", "Kallas", "De Wever", "Schoof", "kabinet"],
+  "sprekers": {
+    "Trump": ["Trump", "president", "Witte Huis", "Leavitt"],
+    "Republikeinen": ["Republikein\\w*", "Vance", "Johnson", "Thune", "GOP", "MAGA"],
+    "Democraten": ["Democra\\w*", "Jeffries", "Schumer", "Harris", "Newsom", "Obama", "Pelosi", "Mamdani", "Spanberger", "Sherrill", "Ocasio-Cortez", "Sanders"],
+    "Kiezers": ["kiezer\\w*", "stemmer\\w*", "inwoner\\w*", "Amerikanen", "burger\\w*", "aanhanger\\w*", "supporter\\w*"],
+    "Experts": ["expert\\w*", "politicolo\\w*", "analist\\w*", "professor", "hoogleraar", "deskundige\\w*", "kenner\\w*", "Amerika-kenner\\w*", "onderzoeker\\w*", "specialist\\w*"],
+    "Eigen verslaggever": ["correspondent\\w*", "verslaggever\\w*", "onze reporter", "ter plaatse"]
+  },
+  "urgentie": {
+    "Nu": {"uitleg": "zojuist, op dit moment", "woorden": ["zojuist", "zonet", "zopas", "zo-even", "net bekend\\w*", "net binnen", "breaking", "nu(?!\\.nl)", "op dit moment", "op dit ogenblik", "momenteel", "live(?!-)", "nog maar net"]},
+    "Spanning": {"uitleg": "spannend, cruciaal", "woorden": ["spann\\w*", "spanning\\w*", "nek-aan-nek\\w*", "nagelbijt\\w*", "zinderend\\w*", "cruciaal", "cruciale", "beslissend\\w*", "doorslaggevend\\w*", "op het spel", "thriller", "ontknoping", "billentikker", "kantelmoment", "adem in", "krap\\w*", "flinterdun\\w*"]},
+    "Vooruitblik": {"uitleg": "straks, elk moment", "woorden": ["straks", "zo meteen", "zometeen", "elk moment", "ieder moment", "binnen het uur", "binnen enkele minuten", "binnen enkele uren", "komende uren", "komende uur", "vannacht nog", "wordt verwacht", "worden verwacht", "verwacht wordt", "wachten op", "wacht nog", "afwachten", "nog even"]}
+  },
+  "partijen": {"Republikeinen": ["Trump", "Republikeinen"], "Democraten": ["Democraten"]},
+  "advies": {
+    "tempo": {"kop": "Vat samen voor de ochtendlezer", "tekst": "De meeste lezers kwamen tussen 07:00 en 09:00 uur, na een nacht vol korte meldingen. Een samenvattende post bovenaan aan het begin van de ochtend helpt hen snel bij te blijven."},
+    "dekking": {"kop": "Leg verwachte momenten vooraf vast", "tekst": "Een lijst met momenten die zeker komen (sluiting van de stembureaus, eerste projecties, toespraken, afgeroepen races) helpt om geen groot moment in het liveblog te missen."}
+  },
+  "koppen": {
+    "eerste": "De Vlaamse liveblogs waren het snelst: HLN en VRT NWS brachten nieuws het vaakst als eerste",
+    "ketens": "Maar die voorsprong is klein: bij grote momenten zit de helft binnen een kwartier op hetzelfde nieuws",
+    "dekking": "Wie alleen het liveblog van de Volkskrant volgde, miste 14 van de 20 grootste momenten",
+    "tempo": "NU.nl tikte uitslagen weg, de Volkskrant schreef beschouwingen: 74 tegenover 217 woorden per post",
+    "taal": "Bij HLN en VRT NWS spreekt de kop met andermans woorden: 4 op de 10 koppen is een citaat",
+    "urgentie": "De Volkskrant schrijft het traagst, maar klinkt het spannendst",
+    "koppen": "Eén uitslag, negen koppen: de woordkeuze verschilt meer dan de feiten",
+    "bronnen": "VRT NWS noemt in 8 op de 10 posts geen bron, de Volkskrant in bijna 8 op de 10 wel",
+    "bronnen_titel": "Iedereen kijkt Amerikaanse tv: CNN is de meest genoemde bron, alleen Trouw leunt op ANP",
+    "sprekers": "Trump en de Democraten voeren het woord; experts en eigen verslaggevers komen er nauwelijks aan te pas",
+    "persoon": "Trump stond niet op het stembiljet, maar wel in ruim een kwart van de HLN-koppen",
+    "partijen": "Democraten winnen de koppen, maar Trump en de Republikeinen krijgen het woord",
+    "framing_partij": "Republikeinen komen in het nieuws met ruzie, Democraten met voorspellingen en voorbehoud",
+    "framing": "Alle liveblogs brachten de midterms als wedstrijd; duiding bleef de kleinste categorie",
+    "invalshoek": "De Morgen en VRT NWS zoeken de Europese hoek; NOS.nl, NU.nl en de Volkskrant blijven in Amerika",
+    "advies": "Zes dingen om te testen bij de volgende verkiezingsnacht"
+  },
+  "clusters": {"drempel": 0.32, "venster": 180}
+}

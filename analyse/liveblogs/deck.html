@@ -1,0 +1,26 @@
+<!doctype html><html lang="nl"><head><meta charset="utf-8"><title>Midterms: tekstanalyse liveblogs</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+html, body { margin:0; background:#DED8E1; }
+.slide { position:absolute; left:50%; top:50%; width:1920px; height:1090px; background:#FFFFFF; display:none; transform-origin:center; box-shadow:0 2px 6px rgba(0,0,0,.15); margin:-545px 0 0 -960px; }
+.slide.on { display:block; }
+.slide > * { position:absolute; }
+h2 { margin:0; font-family:'Century Gothic', 'Avenir Next', 'Futura', sans-serif; font-weight:700; font-size:64px; line-height:.95; color:#1D1B20; }
+.txt { font-family:Inter, sans-serif; font-size:22px; line-height:1.45; color:#1D1B20; }
+.txt p { margin:0 0 16px; }
+.txt p.first { font-weight:600; }
+.note { font-family:Inter, sans-serif; font-size:19px; color:#49454F; }
+.count { position:fixed; right:20px; bottom:14px; font:15px Inter, sans-serif; color:#49454F; }
+</style></head><body>
+{{SLIDES}}
+<div class="count" id="count"></div>
+<script>
+const slides = [...document.querySelectorAll('.slide')];
+let cur = Math.max(0, (parseInt(location.hash.slice(1), 10) || 1) - 1);
+const fit = () => slides.forEach(s => s.style.transform = `scale(${Math.min(innerWidth / 1920, innerHeight / 1090) * .97})`);
+function show(i) { cur = Math.max(0, Math.min(slides.length - 1, i)); slides.forEach((s, k) => s.classList.toggle('on', k === cur));
+  document.getElementById('count').textContent = `${cur + 1} / ${slides.length}`; history.replaceState(null, '', '#' + (cur + 1)); }
+addEventListener('keydown', e => { if (['ArrowRight', 'PageDown', ' '].includes(e.key)) show(cur + 1); if (['ArrowLeft', 'PageUp'].includes(e.key)) show(cur - 1); });
+addEventListener('click', e => show(cur + (e.clientX > innerWidth / 2 ? 1 : -1)));
+addEventListener('resize', fit); fit(); show(cur);
+</script></body></html>
