@@ -161,6 +161,11 @@
           <label for="slideTitle">Titel <em>bij grafiek en tabel klein boven de kop</em></label>
           <input type="text" id="slideTitle" placeholder="Bijv. Midterms 2026">
         </div>
+        <div class="field">
+          <label for="itemKind">Soort items <em>in de kop; leeg = automatisch</em></label>
+          <input type="text" id="itemKind" list="itemKindList" placeholder="Bijv. Artikelen of Pushmeldingen">
+          <datalist id="itemKindList"><option value="Liveblogs"><option value="Artikelen"><option value="Pushmeldingen"><option value="Mails"><option value="Socialposts"></datalist>
+        </div>
 
         <div class="sub-head"><h3>Kaarten</h3></div>
         <div class="field">
@@ -236,9 +241,9 @@
         <dl>
           <dt>Posts</dt><dd>Aantal posts in de gekozen periode.</dd>
           <dt>Frequentie</dt><dd>Posts per actief uur. Pauzes van meer dan 2 uur tellen niet mee.</dd>
-          <dt>Regelmaat</dt><dd>0–100: 100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen. Pas vanaf 20 posts binnen actieve periodes.</dd>
+          <dt>Regelmaat</dt><dd>0–100: 100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen. Pas vanaf 20 posts binnen actieve periodes. In de heatmap per uur wordt de regelmaat over 3 uur rond dat uur berekend (een uur ervoor en erna), pas vanaf 8 tussentijden.</dd>
           <dt>Langste stilte</dt><dd>Langste tijd zonder post; pauzes van meer dan 2 uur tellen niet mee.</dd>
-          <dt>Woorden</dt><dd>Kop en tekst samen. Kort &lt; 40, middel 40–150, lang &gt; 150. Beeld, video en embeds tellen niet mee, ook niet als er tekst in een afbeelding staat.</dd>
+          <dt>Woorden</dt><dd>De lengte van een post is het aantal woorden in de tekst. De kop telt alleen mee als er geen tekst is (bij sport vaak een wissel of doelpunt), zodat lengte niet afhangt van of een titel kop en tekst scheidt of de kop als eerste zin in de tekst herhaalt (NU.nl, AD). Hoe lang koppen zijn, staat apart bij Kop. Kort &lt; 40, middel 40–150, lang &gt; 150. Beeld, video en embeds tellen niet mee, ook niet als er tekst in een afbeelding staat.</dd>
           <dt>Zonder tekst</dt><dd>Aandeel posts zonder lopende tekst: alleen een kop, beeld of embed. Bij sport vaak een wissel of doelpunt. Lees de woordenmaat samen met dit aandeel.</dd>
           <dt>Kop</dt><dd>Staat op elke tekstpost de liveblogtitel (zoals bij De Telegraaf), dan telt dat niet als kop: de post krijgt zijn eerste zin als kop en telt alleen zijn eigen woorden.</dd>
           <dt>Link</dt><dd>Minstens één link naar een artikel. Social, grafiekdiensten, bestanden en eigen embeds tellen niet mee. Links naar de eigen site (zelfde domein als de liveblog) zijn eigen artikelen, gratis of premium; links naar andere sites zijn uitgaand. In grafieken krijgt elke post één soort: eigen premium gaat voor eigen gratis, eigen gratis voor uitgaand.</dd>
@@ -254,14 +259,14 @@
         </dl>
 
         <div class="sub-head"><h3>Tekst</h3></div>
-        <p>De tekstmaten werken voor elke Nederlandstalige liveblog, los van het onderwerp. Ze tellen vaste patronen en woorden; het blijven indicaties. Posts zonder kop of tekst ('Liveblog update') tellen bij de kopmaten niet mee. Ze staan in Tabel (Toon: snelheid en ritme, vorm of inhoud), in Vergelijking en per uur: de staafgrafiek telt posts met het kenmerk, lijn en heatmap tonen het aandeel of de dichtheid (pas vanaf 3 posts in dat uur). Per uur kan ook gedeeld nieuws: posts die als eerste kwamen (staven), het aandeel eerste en de mediane achterstand als volger (lijn en heatmap). In Vergelijking kunnen twee kengetallen naast elkaar; Spreiding zet er twee tegen elkaar uit (bolgrootte = aantal posts), het liefst met een bereikmaat op de y-as.</p>
+        <p>De tekstmaten werken voor elke Nederlandstalige liveblog, los van het onderwerp. Ze tellen vaste patronen en woorden; het blijven indicaties. Posts zonder kop of tekst ('Liveblog update') tellen bij de kopmaten niet mee. Ze staan in Tabel (Toon: snelheid en ritme, vorm of inhoud), in Vergelijking en per uur: de staafgrafiek telt posts met het kenmerk, lijn en heatmap tonen het aandeel of de dichtheid (pas vanaf 3 posts in dat uur). Per uur kan ook gedeeld nieuws: posts die als eerste kwamen (staven), het aandeel eerste en de mediane achterstand (lijn en heatmap, pas vanaf 3 momenten in dat uur). In Vergelijking kunnen twee kengetallen naast elkaar; Spreiding zet er twee tegen elkaar uit (bolgrootte = aantal posts), het liefst met een bereikmaat op de y-as.</p>
         <dl>
-          <dt>Gedeeld nieuws</dt><dd>Posts van verschillende titels die binnen 3 uur inhoudelijk op elkaar lijken (woordvergelijking van kop en begin van de tekst) vormen samen een nieuwsmoment. Per titel: hoe vaak als eerste, welk deel van alle momenten in het liveblog staat en de mediane achterstand als volger. Alleen liveblogposts: pushberichten, artikelen en tv vallen erbuiten.</dd>
+          <dt>Gedeeld nieuws</dt><dd>Posts van verschillende titels die binnen 3 uur inhoudelijk op elkaar lijken (woordvergelijking van kop en begin van de tekst) vormen samen een nieuwsmoment. Per titel: hoe vaak als eerste, welk deel van alle momenten in het liveblog staat en de mediane achterstand als de titel het nieuws brengt (de eerste telt als 0 minuten). Niet brengen telt daar niet in mee: snelheid en dekking zijn twee verschillende dingen, en dekking staat apart. Alleen liveblogposts: pushberichten, artikelen en tv vallen erbuiten.</dd>
           <dt>Citaatkop</dt><dd>Aandeel koppen met een citaat.</dd>
           <dt>Uitspraken</dt><dd>Aandeel zinnen met aanhalingstekens of een werkwoord als zegt, stelt, schrijft of laat weten.</dd>
           <dt>Bron</dt><dd>Aandeel posts dat een persbureau noemt of een bron opvoert (volgens, meldt, laat weten, bevestigt). Fotobijschriften en ondertekening als (ANP) tellen niet mee.</dd>
-          <dt>Urgentie</dt><dd>Woorden als zojuist, op dit moment, spannend en cruciaal, per 1.000 woorden. 'Nu' telt ook als voegwoord; vergelijk vooral titels onderling.</dd>
-          <dt>Eigen hoek</dt><dd>Nederland, België, Vlaanderen, Brussel, Den Haag, Europa, EU en NAVO, per 1.000 woorden.</dd>
+          <dt>Urgentie</dt><dd>Woorden als zojuist, spannend, cruciaal en op het spel, per 1.000 woorden. Alledaagse woorden als 'nu' en 'momenteel' tellen niet mee; 'nu' staat in een op de vier posts.</dd>
+          <dt>Eigen land</dt><dd>Nederland, Den Haag en Haagse voor Nederlandse titels; België, Belgische, Vlaanderen en Vlaamse voor Belgische titels (HLN, VRT NWS, De Morgen), per 1.000 woorden.</dd>
         </dl>
 
         <div class="sub-head"><h3>Bereik</h3></div>
@@ -407,6 +412,6 @@
 
 <script src="logos.js?v=20261116b"></script>
 <script src="favicons.js?v=20261117a"></script>
-<script src="app.js?v=20261119y"></script>
+<script src="app.js?v=20261120h"></script>
 </body>
 </html>

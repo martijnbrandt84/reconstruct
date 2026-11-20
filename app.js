@@ -134,7 +134,7 @@ const defaultState = () => ({
   metrics: [], brands: {}, removed: [], hiddenTitles: [], datasets: [],
   settings: {
     startTime: '06:00', endTime: '06:20',
-    columns: 5, perTitle: 1, showDate: true, slideTitle: '', format: 'auto',
+    columns: 5, perTitle: 1, showDate: true, slideTitle: '', itemKind: '', format: 'auto',
     relative: false, highlightMax: true, titleLines: 0, cardStyle: 'modern',
     showBody: false,
     showImage: true,
@@ -210,8 +210,23 @@ function parseCSV(text, delim) {
 
 function stripHtmlTags(html) {
   const tmp = document.createElement('div');
-  tmp.innerHTML = String(html || '');
+  // witruimte op blokgrenzen, anders plakt textContent kop en eerste zin aan elkaar ('opraken' + 'Op sommige')
+  tmp.innerHTML = String(html || '').replace(/<\/(?:p|div|h[1-6]|li|ul|ol|blockquote|section|article|figure|tr)>|<br\s*\/?>/gi, '$& ');
   return (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim();
+}
+
+/** Kop aan het begin van een post: een kopje of een vetgedrukte eerste regel, mits er daarna nog tekst volgt. */
+function leadHeadlineFromHtml(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = String(html || '');
+  let el = tmp.firstElementChild;
+  if (!el) return '';
+  const bold = (x) => /^(STRONG|B)$/.test(x.tagName);
+  const text = (x) => (x.textContent || '').replace(/\s+/g, ' ').trim();
+  if (el.tagName === 'P' && el.children.length === 1 && bold(el.firstElementChild) && text(el) === text(el.firstElementChild)) el = el.firstElementChild;
+  if (!/^(H[1-6]|STRONG|B)$/.test(el.tagName)) return '';
+  const head = text(el);
+  return head && stripHtmlTags(html).length > head.length + 10 ? head : '';
 }
 
 function summarizeUpdateText(text) {
@@ -316,17 +331,48 @@ function linkInfo(r) {
 const PAUSE_MIN = 120;
 const LENGTH_CLASSES = [['kort', 'Kort (<40 woorden)', 40], ['middel', 'Middel (40\u2013150)', 150], ['lang', 'Lang (>150)', Infinity]];
 
-const postWords = (r) => +r.woorden || wordCount(r[state.mapping.title], state.mapping.body ? r[state.mapping.body] : '');
+// lengte van een post: woorden in de tekst; de kop telt alleen mee als er geen tekst is (zo hangt lengte niet af van hoe een titel kop en tekst scheidt)
+const postWords = (r) => {
+  if (!state.mapping.title) return +r.woorden || 0;
+  return wordCount(sentenceBody(r)) || wordCount(rowHead(r));
+};
+// kop en tekst samen, zonder dubbeltelling; bepaalt of een post groot genoeg is voor gedeeld nieuws
+const allWords = (r) => state.mapping.title ? wordCount(fullPostText(r)) : (+r.woorden || 0);
 const lengthClass = (words) => LENGTH_CLASSES.find(([, , max]) => words < max)[0];
 // woorden per zin in de tekst van een post; zinnen korter dan 3 woorden (kreten, bijschriften) tellen niet mee
 const splitSentences = (text) => String(text || '')
   .split(/(?<=[.!?])\s+(?=[A-ZÀ-Ý"'‘“,])/)
   .filter(s => s.split(/\s+/).filter(w => /\w/.test(w)).length >= 3);
-const sentenceLengths = (r) => splitSentences(state.mapping.body && r[state.mapping.body])
+const sentenceLengths = (r) => splitSentences(sentenceBody(r))
   .map(s => s.split(/\s+/).filter(w => /\w/.test(w)).length);
 
 /* ---------- tekstanalyse: maten die voor elke Nederlandstalige liveblog werken, los van onderwerp of gebeurtenis ---------- */
 const PLACEHOLDER_HEAD = /^Liveblog update( \d+)?$/;
+// begint de tekst met de kop (op leestekens na), dan staat de kop er al in
+const startsWithHead = (h, b) => { const x = h.replace(/[\s.:;\u2026"'\u201c\u201d\u2018\u2019]+$/, ''); return x.length >= 8 && b.startsWith(x); };
+/** Kop van een post. NU.nl plakt de eerste zin aan de kop ('KentuckyEr valt'); die kop staat ook vooraan de tekst,
+ *  en de echte kop eindigt bij de overgang van kleine letter naar hoofdletter. */
+function headOf(r) {
+  const m = state.mapping;
+  const h = String(r[m.title] ?? '').trim();
+  if (!h || !m.body) return h;
+  if (startsWithHead(h, String(r[m.body] ?? '').trim())) {
+    const g = h.match(/^(.{8,160}?[a-z\d.?!)'\u2019"])([A-Z][a-z])/);
+    if (g) return g[1].trim();
+  }
+  // NU.nl zonder hoofdletter op de plek van de overgang: kop eindigt voor een zin die met een lidwoord of voegwoord begint
+  if (m.brand && /^NU\.nl$/.test(String(r[m.brand] ?? '').trim())) {
+    const g = String(r[m.body] ?? '').trim().match(/^(.{15,160}?[a-z\d]) (?=(?:De|Het|In|Een|Op|Dat|Die|Met|Voor|Volgens|Ook|Bij|Na|Zo|Er|Hij|Zij|Ze|Daarmee|Nadat|Om|Hoewel|Inmiddels|Namens|Geen)\b)/);
+    if (g) return g[1].replace(/[\s"'\u2018\u2019\u201c\u201d:]+$/, '');
+  }
+  return h;
+}
+// kop en tekst als één tekst, zonder de kop dubbel te nemen als de tekst ermee begint; placeholderkoppen tellen niet
+const fullPostText = (r) => {
+  const h = PLACEHOLDER_HEAD.test(headOf(r)) ? '' : fullText(headOf(r));
+  const b = h ? bodyOnly(r) : fullText(state.mapping.body ? r[state.mapping.body] : '');
+  return `${h} ${b}`.trim();
+};
 const wordsRe = (words, flags = 'iu') => new RegExp(`(?<![\\p{L}\\d])(?:${words.join('|')})(?![\\p{L}\\d])`, flags);
 // aanhalingstekens; een los apostrof-s ('s nachts, Trump's) telt niet
 const QUOTE_RE = /["“”„]|,,|‘[^’]{3,}’|'[^'\s][^']{2,}'/;
@@ -336,11 +382,19 @@ const SPEECH_WORDS = ['zegt', 'zei', 'zeiden', 'zeggen', 'aldus', 'verklaar\\p{L
 const SPEECH_RE = wordsRe(SPEECH_WORDS);
 const AGENCY_RE = wordsRe(['ANP', 'AP', 'Associated Press', 'Reuters', 'AFP', 'Belga', 'dpa', 'Bloomberg'], 'u');
 const ATTRIB_RE = wordsRe(['volgens', 'meldt', 'melden', 'meldde', 'berichtt?en', 'berichtte', 'laat weten', 'liet weten', 'bevestigt', 'bevestigde', 'aldus', 'schrijft', 'schreef']);
-const URGENCY_WORDS = ['zojuist', 'zonet', 'zopas', 'zo-even', 'net bekend\\p{L}*', 'net binnen', 'breaking', 'nu(?!\\.nl)', 'op dit moment', 'op dit ogenblik', 'momenteel',
+// alledaagse woorden als 'nu' (in 1 op de 4 posts) en 'momenteel' zeggen niets over urgentie en staan er bewust niet in
+const URGENCY_WORDS = ['zojuist', 'zonet', 'zopas', 'zo-even', 'net bekend\\p{L}*', 'net binnen', 'breaking',
   'nog maar net', 'spann\\p{L}*', 'spanning\\p{L}*', 'nek-aan-nek\\p{L}*', 'nagelbijt\\p{L}*', 'cruciaal', 'cruciale', 'beslissend\\p{L}*', 'doorslaggevend\\p{L}*', 'op het spel',
   'kantelmoment', 'adem in'];
-const OWN_ANGLE_WORDS = ['Nederland\\p{L}*', 'Belgi\\p{L}*', 'Vlaams\\p{L}*', 'Vlaming\\p{L}*', 'Brussel', 'Den Haag', 'Europ\\p{L}*', 'EU', 'NAVO'];
-const URGENCY_RE = wordsRe(URGENCY_WORDS, 'giu'), OWN_ANGLE_RE = wordsRe(OWN_ANGLE_WORDS, 'giu');
+// eigen land: Nederland voor Nederlandse titels, België voor Belgische titels (geen Europa of NAVO)
+const OWN_ANGLE_WORDS = {
+  NL: ['Nederland\\p{L}*', 'Den Haag', 'Haags\\p{L}*'],
+  BE: ['Belgi\\p{L}*', 'Belg(?:en)?', 'Vlaams\\p{L}*', 'Vlaming\\p{L}*', 'Vlaanderen']
+};
+const BELGIAN_TITLES = /^(HLN|VRT(?:\s?NWS)?|De Morgen|De Standaard|(?:Het )?Nieuwsblad|Het Laatste Nieuws|Gazet van Antwerpen|GVA|Knack|Bruzz)$/i;
+const URGENCY_RE = wordsRe(URGENCY_WORDS, 'giu');
+const OWN_ANGLE_RE = { NL: wordsRe(OWN_ANGLE_WORDS.NL, 'giu'), BE: wordsRe(OWN_ANGLE_WORDS.BE, 'giu') };
+const ownAngleRe = (r) => OWN_ANGLE_RE[state.mapping.brand && BELGIAN_TITLES.test(String(r[state.mapping.brand] ?? '').trim()) ? 'BE' : 'NL'];
 // fotobijschriften en ondertekening als (ANP) zijn geen bronvermelding in de tekst
 const stripCredits = (s) => String(s).replace(/\((?:foto|beeld)[^)]*\)/gi, ' ').replace(/\((?:ANP|Belga|AP|AFP|Reuters|Redactie)[^)]*\)\s*$/i, ' ');
 
@@ -348,47 +402,66 @@ const stripCredits = (s) => String(s).replace(/\((?:foto|beeld)[^)]*\)/gi, ' ').
 function textStats(rows) {
   const m = state.mapping;
   if (!m.title) return {};
-  const heads = rows.map(r => String(r[m.title] ?? '').trim()).filter(h => h && !PLACEHOLDER_HEAD.test(h));
-  const bodies = m.body ? rows.map(r => String(r[m.body] ?? '').trim()).filter(Boolean) : [];
-  const all = rows.map(r => `${r[m.title] ?? ''} ${m.body ? r[m.body] ?? '' : ''}`);
+  const heads = rows.map(headOf).filter(h => h && !PLACEHOLDER_HEAD.test(h));
+  const bodies = m.body ? rows.map(sentenceBody).map(s => s.trim()).filter(Boolean) : [];
+  const all = rows.map(fullPostText);
   const share = (arr, f) => arr.length ? arr.filter(f).length / arr.length : null;
   const sents = bodies.flatMap(splitSentences);
   const words = all.reduce((a, x) => a + x.split(/\s+/).filter(w => /\p{L}/u.test(w)).length, 0);
   const per1000 = (re) => words ? 1000 * all.reduce((a, x) => a + (x.match(re) || []).length, 0) / words : null;
+  const own = words ? 1000 * all.reduce((a, x, i) => a + (x.match(ownAngleRe(rows[i])) || []).length, 0) / words : null;
   return {
     headQuote: share(heads, h => QUOTE_RE.test(h)),
     statements: sents.length ? sents.filter(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)).length / sents.length : null,
     sourced: share(all, x => { const c = stripCredits(x); return AGENCY_RE.test(c) || ATTRIB_RE.test(c); }),
     urgency: per1000(URGENCY_RE),
-    ownAngle: per1000(OWN_ANGLE_RE)
+    ownAngle: own
   };
 }
 
-const rowHead = (r) => { const h = String(r[state.mapping.title] ?? '').trim(); return PLACEHOLDER_HEAD.test(h) ? '' : h; };
-const rowText = (r) => `${r[state.mapping.title] ?? ''} ${state.mapping.body ? r[state.mapping.body] ?? '' : ''}`;
+const rowHead = (r) => { const h = headOf(r); return PLACEHOLDER_HEAD.test(h) ? '' : h; };
+const rowText = fullPostText;
 // tekst van de post zonder de kop die er soms vooraan in staat; leeg = alleen kop, beeld of embed
 const bodyOnly = (r) => {
   const b = fullText(state.mapping.body ? r[state.mapping.body] : '');
-  const h = fullText(r[state.mapping.title]);
-  return h && b.startsWith(h) ? b.slice(h.length).trim() : b;
+  const h = fullText(headOf(r)).replace(/[\s.:;\u2026"'\u201c\u201d\u2018\u2019]+$/, '');
+  if (!startsWithHead(h, b)) return b;
+  let rest = b.slice(h.length);
+  // kop afgekapt midden in een woord: het restant van dat woord hoort er niet meer bij
+  if (/[\p{L}\d]$/u.test(h) && /^\p{Ll}/u.test(rest)) rest = rest.replace(/^\S*\s*/, '');
+  return rest.replace(/^[\s.:;\u2026"'\u201c\u201d\u2018\u2019]+/, '');
+};
+// tekst voor zinsmaten: bij NU.nl zonder de aan de kop geplakte zin
+const sentenceBody = (r) => {
+  const raw = state.mapping.body ? String(r[state.mapping.body] ?? '') : '';
+  return state.mapping.title && headOf(r) !== String(r[state.mapping.title] ?? '').trim() ? bodyOnly(r) : raw;
 };
 const hasMatch = (re, s) => (String(s).match(re) || []).length > 0;
 /** Tekstmaten per uur. test(it): telt een post mee in de staafgrafiek; key: maat uit textStats voor lijn en heatmap, of value(items).
  *  moments: rol bij gedeeld nieuws nodig (chartRole); bars: false = niet als staaf. */
 let chartRole = () => null;
+let chartMoments = null;
+/** Gedeeld nieuws per titel en uur: momenten die in dat uur beginnen. Achterstand telt alleen momenten die de titel bracht; niet brengen is dekking, geen snelheid. */
+function momentCell(name, from, to, kind) {
+  const ms = (chartMoments?.list || []).filter(mo => mo.start >= from && mo.start < to);
+  if (ms.length < 3) return null;
+  if (kind === 'first') return 100 * ms.filter(mo => mo.first === name).length / ms.length;
+  const lags = ms.filter(mo => mo.who.has(name)).map(mo => mo.who.get(name));
+  return lags.length >= 2 ? medianOf(lags) : null;
+}
 const TEXT_MEASURES = {
   __tfirst: { axis: 'speed', post: 'als eerste bij gedeeld nieuws', rate: 'Als eerste bij gedeeld nieuws (%)', moments: true,
     test: it => !!chartRole(it)?.first,
-    value: its => { const r = its.map(chartRole).filter(Boolean); return r.length >= 2 ? 100 * r.filter(x => x.first).length / r.length : null; } },
-  __tlag: { axis: 'speed', rate: 'Achterstand als volger (mediaan, min)', moments: true, bars: false,
-    value: its => { const lags = its.map(chartRole).filter(x => x && !x.first).map(x => x.lag); return lags.length ? medianOf(lags) : null; } },
+    cell: (name, from, to) => momentCell(name, from, to, 'first') },
+  __tlag: { axis: 'speed', rate: 'Achterstand bij gebracht nieuws (mediaan min)', moments: true, bars: false,
+    cell: (name, from, to) => momentCell(name, from, to, 'lag') },
   __tquote: { axis: 'content', post: 'citaat in de kop', rate: 'Koppen met citaat (%)', key: 'headQuote', pct: true, test: it => QUOTE_RE.test(rowHead(it.row)) },
   __tstate: { axis: 'content', post: 'een uitspraak', rate: 'Zinnen met een uitspraak (%)', key: 'statements', pct: true,
-    test: it => splitSentences(state.mapping.body && it.row[state.mapping.body]).some(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)) },
+    test: it => splitSentences(sentenceBody(it.row)).some(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)) },
   __tsource: { axis: 'content', post: 'bronvermelding', rate: 'Posts met bronvermelding (%)', key: 'sourced', pct: true,
     test: it => { const c = stripCredits(rowText(it.row)); return AGENCY_RE.test(c) || ATTRIB_RE.test(c); } },
   __turgency: { axis: 'content', post: 'urgentietaal', rate: 'Urgentietaal per 1.000 woorden', key: 'urgency', test: it => hasMatch(URGENCY_RE, rowText(it.row)) },
-  __town: { axis: 'content', post: 'eigen land of Europa', rate: 'Eigen land of Europa per 1.000 woorden', key: 'ownAngle', test: it => hasMatch(OWN_ANGLE_RE, rowText(it.row)) }
+  __town: { axis: 'content', post: 'het eigen land', rate: 'Eigen land (NL of BE) per 1.000 woorden', key: 'ownAngle', test: it => hasMatch(ownAngleRe(it.row), rowText(it.row)) }
 };
 // per uur pas vanaf 3 posts; daaronder springt een aandeel van 0 naar 100%
 const textValue = (tm, its) => {
@@ -407,15 +480,16 @@ let momentsCache = { key: '', value: null };
 
 /** Gedeelde nieuwsmomenten: posts van verschillende titels die binnen `windowMin` minuten inhoudelijk op elkaar lijken
  *  (tf-idf op kop en begin van de tekst). Per titel: hoe vaak eerste, hoe vaak volger en de achterstand in minuten. */
-function sharedMoments(items, keyOf, thr = 0.32, windowMin = 180) {
+function sharedMoments(items, keyOf, thr = 0.25, windowMin = 180, mergeMin = 0.24) {
   const m = state.mapping;
   const list = items.slice().sort((a, b) => a.minutes - b.minutes);
   const cacheKey = `${m.title}|${m.body}|` + list.map(it => momentKey(it, keyOf)).join('|');
   if (momentsCache.key === cacheKey) return momentsCache.value;
   const n = list.length;
   const tfs = list.map(it => {
-    const head = String(it.row[m.title] ?? ''), body = m.body ? String(it.row[m.body] ?? '').slice(0, 400) : '';
-    const toks = (`${head} ${head} ${body}`.toLowerCase().match(/[a-zà-ÿ][a-zà-ÿ'-]{2,}/g) || []).filter(w => !STOP_NL.has(w));
+    const head = headOf(it.row), body = m.body ? bodyOnly(it.row).slice(0, 400) : '';
+    // NU.nl plakt kop en eerste zin aan elkaar ('FloridaGeen verrassing')
+    const toks = (`${head} ${head} ${body}`.replace(/([a-zà-ÿ])([A-ZÀ-Þ])/g, '$1 $2').toLowerCase().match(/[a-zà-ÿ][a-zà-ÿ'-]{2,}/g) || []).filter(w => !STOP_NL.has(w));
     const tf = new Map();
     toks.forEach((w, i) => {
       tf.set(w, (tf.get(w) || 0) + 1);
@@ -446,7 +520,7 @@ function sharedMoments(items, keyOf, thr = 0.32, windowMin = 180) {
     return s;
   };
   const keys = list.map(keyOf);
-  const ok = list.map(it => !PLACEHOLDER_HEAD.test(String(it.row[m.title] ?? '').trim()) && postWords(it.row) >= 8);
+  const ok = list.map(it => !PLACEHOLDER_HEAD.test(String(it.row[m.title] ?? '').trim()) && allWords(it.row) >= 8);
   const pairs = [];
   for (let i = 0; i < n; i++) {
     if (!ok[i]) continue;
@@ -471,13 +545,14 @@ function sharedMoments(items, keyOf, thr = 0.32, windowMin = 180) {
     if (Math.max(...span) - Math.min(...span) > windowMin) return;
     let total = 0;
     A.forEach(x => B.forEach(y => { total += sim(x, y); }));
-    if (total / (A.length * B.length) < thr * 0.75) return;
+    if (total / (A.length * B.length) < mergeMin) return;
     parent[b] = a;
     members.set(a, A.concat(B));
     members.delete(b);
   });
   const per = new Map();
   const roles = new Map();
+  const moments_ = [];
   const slot = (k) => per.get(k) || per.set(k, { first: 0, follow: 0, lags: [] }).get(k);
   let moments = 0;
   members.forEach(idx => {
@@ -487,14 +562,17 @@ function sharedMoments(items, keyOf, thr = 0.32, windowMin = 180) {
     const t0 = list[idx[0]].minutes;
     slot(keys[idx[0]]).first++;
     roles.set(momentKey(list[idx[0]], keyOf), { first: true, lag: 0 });
+    const who = new Map([[keys[idx[0]], 0]]);
     idx.slice(1).forEach(k => {
       const p = slot(keys[k]);
       p.follow++;
       p.lags.push(list[k].minutes - t0);
+      who.set(keys[k], list[k].minutes - t0);
       roles.set(momentKey(list[k], keyOf), { first: false, lag: list[k].minutes - t0 });
     });
+    moments_.push({ start: t0, first: keys[idx[0]], who });
   });
-  momentsCache = { key: cacheKey, value: { moments, per, roles } };
+  momentsCache = { key: cacheKey, value: { moments, per, roles, list: moments_, window: windowMin } };
   return momentsCache.value;
 }
 // sleutel per post, ook als visibleItems() nieuwe objecten maakt
@@ -1088,7 +1166,9 @@ function postText(el) {
   [...clone.querySelectorAll('p, span, div')]
     .filter(x => !x.children.length && /^(\d{1,2}:\d{2}|\d{1,2}\s+\p{L}+\s+\d{4})$/u.test((x.textContent || '').trim()))
     .forEach(x => x.remove());
-  const headline = (clone.querySelector('h1, h2, h3, h4')?.textContent || '').replace(/\s+/g, ' ').trim();
+  // blokgrenzen als spatie, anders plakt textContent kop en eerste zin aan elkaar
+  clone.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, br, blockquote').forEach(x => x.after(' '));
+  const headline = (clone.querySelector('h1, h2, h3, h4')?.textContent || '').replace(/\s+/g, ' ').trim() || leadHeadlineFromHtml(clone.innerHTML);
   let body = (clone.textContent || '').replace(/\s+/g, ' ').trim();
   if (headline && body.startsWith(headline)) body = body.slice(headline.length).trim();
   return { headline, body };
@@ -1247,8 +1327,11 @@ function tryParseLiveblogHtml(text) {
       || media.still
       || firstImageFromHtml(box?.outerHTML)
       || '';
-    const body = stripHtmlTags(u?.articleBody || '');
-    const updateHeadline = stripHtmlTags(u?.headline || '');
+    const bodyAll = stripHtmlTags(u?.articleBody || '');
+    // zonder aparte kop in de data: een kopje of vetgedrukte eerste regel van de post is de kop
+    const lead = stripHtmlTags(u?.headline || '') ? '' : leadHeadlineFromHtml(u?.articleBody);
+    const body = lead && bodyAll.startsWith(lead) ? bodyAll.slice(lead.length).trim() : bodyAll;
+    const updateHeadline = stripHtmlTags(u?.headline || '') || lead;
     const title = clipText(updateHeadline || summarizeUpdateText(body) || `Liveblog update ${idx + 1}`, 150);
     return {
       merk: sourceBrand,
@@ -1751,6 +1834,7 @@ function applyLiveblogResult(liveblog, silent, sourceUrl = '') {
   if (existing && liveblog.rows.length) {
     const before = existing.rowCount;
     const n = replaceDatasetRows(existing.id, liveblog.rows, headers, !liveblog.authoritative);
+    if (liveblog.tickaroo) existing.tickaroo = liveblog.tickaroo;
     existing.active = true;
     autoMap();
     renderAll();
@@ -1758,7 +1842,7 @@ function applyLiveblogResult(liveblog, silent, sourceUrl = '') {
     if (!silent) toast(`${existing.label}: ${n} updates${n > before ? ` (+${n - before})` : ''}.`);
     return true;
   }
-  const n = appendDataset(liveblog.rows, headers, { label: liveblog.rows[0]?.liveblog_titel || 'Liveblog', kind: 'liveblog', sourceUrl });
+  const n = appendDataset(liveblog.rows, headers, { label: liveblog.rows[0]?.liveblog_titel || 'Liveblog', kind: 'liveblog', sourceUrl, tickaroo: liveblog.tickaroo });
   if (!n) {
     if (!silent) toast('Liveblog herkend, maar bevatte geen bruikbare updates.');
     return false;
@@ -2023,7 +2107,8 @@ function appendDataset(rowsInput, headersInput, opts = {}) {
     kind: opts.kind || 'table',
     rowCount: appended.length,
     active: true,
-    sourceUrl: isHttpUrl(opts.sourceUrl) ? opts.sourceUrl : ''
+    sourceUrl: isHttpUrl(opts.sourceUrl) ? opts.sourceUrl : '',
+    ...(opts.tickaroo ? { tickaroo: opts.tickaroo } : {})
   });
   return appended.length;
 }
@@ -2439,7 +2524,8 @@ async function fetchTickarooLiveblogRows(info, doc) {
       'merk', 'bron', 'tijd', 'titel', 'article_type', 'article_url', 'afbeelding', 'liveblog_titel', 'update_tekst',
       'update_nummer', 'minuten_sinds_start', 'minuten_sinds_vorige'
     ],
-    rows
+    rows,
+    tickaroo: { clientId: info.clientId, liveblogId: info.liveblogId, canonicalUrl, title: liveTitle }
   };
 }
 
@@ -2532,8 +2618,16 @@ async function refreshDataset(d, silent = false) {
   refreshing.add(d.id);
   renderDatasetTabs();
   try {
-    const html = await requestPage(d.sourceUrl);
-    const result = await parseLiveblogAny(html, d.sourceUrl);
+    // Tickaroo-liveblogs verversen via hun API; de paginafetch van de site zelf wordt soms geweigerd
+    let result;
+    if (d.tickaroo) {
+      const t = d.tickaroo;
+      const doc = new DOMParser().parseFromString(
+        `<link rel="canonical" href="${escAttr(t.canonicalUrl || d.sourceUrl)}"><meta property="og:title" content="${escAttr(t.title || '')}">`, 'text/html');
+      result = await fetchTickarooLiveblogRows(t, doc);
+    } else {
+      result = await parseLiveblogAny(await requestPage(d.sourceUrl), d.sourceUrl);
+    }
     if (!result?.rows?.length) throw new Error('geen liveblog-updates gevonden in de pagina');
     const before = d.rowCount;
     const headers = withExtraHeaders(result.headers);
@@ -3871,7 +3965,7 @@ function renderTimelineInner() {
   // zelfde kop als bij grafieken en tabel: eigen titel klein erboven, beschrijvende kop, daaronder periode en aantallen
   $('#slideKicker').textContent = s.slideTitle || '';
   $('#slideKicker').hidden = !s.slideTitle;
-  titleEl.textContent = 'Liveblogs op de tijdlijn';
+  titleEl.textContent = `${itemNoun(allItems)} op de tijdlijn`;
   titleEl.hidden = false;
 
   const parts = [];
@@ -4170,6 +4264,18 @@ function periodText(start, end) {
   return txt;
 }
 
+/** Wat de items zijn (voor in de kop): door de gebruiker ingesteld, anders liveblogs als de data daar duidelijk op wijst. */
+function itemNoun(items = visibleItems()) {
+  const kind = String(state.settings.itemKind || '').trim();
+  if (kind) return kind.charAt(0).toUpperCase() + kind.slice(1);
+  const m = state.mapping;
+  const active = (state.datasets || []).filter(d => d.active);
+  const live = (active.length && active.every(d => d.kind === 'liveblog'))
+    || state.headers.some(h => /liveblog|postnummer|update_nummer/i.test(h))
+    || (items.length && items.every(it => isLiveblog(m.title ? it.row[m.title] : '', m.articleType ? it.row[m.articleType] : '')));
+  return live ? 'Liveblogs' : 'Berichten';
+}
+
 /** Slidekop: eigen titel klein erboven, de kop zelf beschrijft wat je ziet, daaronder uitleg, periode en aantallen. */
 function setSlideHead(title, parts) {
   $('#slideKicker').textContent = state.settings.slideTitle || '';
@@ -4198,12 +4304,12 @@ const EXPLAIN = {
   external: 'Aandeel posts met minstens één link naar een andere site',
   firstShare: 'Aandeel van alle gedeelde nieuwsmomenten waarin deze titel als eerste post',
   coverShare: 'Aandeel van alle gedeelde nieuwsmomenten dat deze titel in het liveblog brengt',
-  medianLag: 'Mediaan aantal minuten na de eerste post, als de titel volgt',
+  lag: 'Mediaan aantal minuten na de eerste post, over de gedeelde momenten die de titel bracht (de eerste telt als 0); niet brengen telt hier niet mee, dat staat bij Gedeeld nieuws gebracht',
   headQuote: 'Aandeel koppen met aanhalingstekens',
   statements: 'Aandeel zinnen met aanhalingstekens of een werkwoord als zegt, stelt of schrijft',
   sourced: 'Aandeel posts dat een persbureau noemt of een bron opvoert (volgens, meldt, laat weten); fotobijschriften en ondertekening tellen niet mee',
-  urgency: 'Woorden als zojuist, op dit moment, spannend en cruciaal, per 1.000 woorden',
-  ownAngle: 'Nederland, België, Vlaanderen, Brussel, Den Haag, Europa, EU en NAVO, per 1.000 woorden',
+  urgency: 'Woorden als zojuist, spannend, cruciaal en op het spel, per 1.000 woorden; alledaagse woorden als nu en momenteel tellen niet mee',
+  ownAngle: 'Nederland, Den Haag en Haagse voor Nederlandse titels; België, Belgische, Vlaanderen en Vlaamse voor Belgische titels, per 1.000 woorden',
   reachViews: 'Weergaven van de liveblog, opgeteld over de uren',
   reachUsers: 'Gebruikers per uur, opgeteld; geen unieke gebruikers',
   reachVpu: 'Weergaven gedeeld door gebruikers',
@@ -4216,7 +4322,7 @@ const EXPLAIN = {
   __vpu: 'Weergaven gedeeld door gebruikers',
   __vpp: 'Weergaven gedeeld door het aantal posts in dat uur',
   __words: 'Mediaan aantal woorden per post, kop en tekst samen',
-  __regularity: '100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen'
+  __regularity: '100 = vast ritme, 50 = willekeurig, 0 = alles in uitbarstingen; berekend over 3 uur rond het uur (een uur ervoor en erna), pas vanaf 8 tussentijden'
 };
 const explainOf = (key) => EXPLAIN[key]
   || (/_sum$/.test(key) ? 'Totaal van alle posts' : /_avg$/.test(key) ? 'Gemiddelde per post' : /_med$/.test(key) ? 'Mediaan per post' : '');
@@ -4227,10 +4333,15 @@ function renderHeatmap(view, { names, hours, items, bucketOf, brandCol, absolute
   // tussentijd tot de vorige post van dezelfde titel, alleen binnen een sessie
   const prevGap = new Map();
   const lastByTitle = new Map();
+  const gapsByRow = names.map(() => []);
   [...items].sort((a, b) => a.minutes - b.minutes).forEach(it => {
     const key = brandCol ? it.row[brandCol] : '';
     const prev = lastByTitle.get(key);
-    if (prev !== undefined && it.minutes - prev <= PAUSE_MIN) prevGap.set(it, it.minutes - prev);
+    if (prev !== undefined && it.minutes - prev <= PAUSE_MIN) {
+      prevGap.set(it, it.minutes - prev);
+      const ri = brandCol ? names.indexOf(key) : 0;
+      if (ri >= 0) gapsByRow[ri].push({ t: it.minutes, g: it.minutes - prev });
+    }
     lastByTitle.set(key, it.minutes);
   });
   items.forEach(it => {
@@ -4240,11 +4351,17 @@ function renderHeatmap(view, { names, hours, items, bucketOf, brandCol, absolute
   const valueOf = (list) => {
     if (!list.length) return null;
     if (mode === 'words') return medianOf(list.map(it => postWords(it.row)));
-    // per uur zijn er weinig tussentijden; vanaf 4 al een indicatie
-    if (mode === 'regularity') return regularityScore(list.map(it => prevGap.get(it)).filter(g => g !== undefined), 4);
     return list.reduce((a, it) => a + weight(it), 0);
   };
-  const counts = cell ? names.map(n => hours.map((_, i) => cell(n, i))) : cellItems.map(row => row.map(valueOf));
+  // regelmaat over uurgrenzen heen: tussentijden van het uur zelf plus een uur ervoor en erna, terug toegekend aan dat uur
+  const regularityAt = (r, c) => {
+    if (!cellItems[r][c].length) return null;
+    const lo = hours[c] - 60, hi = hours[c] + 120;
+    return regularityScore(gapsByRow[r].filter(x => x.t >= lo && x.t < hi).map(x => x.g), 8);
+  };
+  const counts = cell ? names.map(n => hours.map((_, i) => cell(n, i)))
+    : mode === 'regularity' ? cellItems.map((row, r) => row.map((_, c) => regularityAt(r, c)))
+      : cellItems.map(row => row.map(valueOf));
   const short = (v) => v === null ? '' : sig3(v);
   const vals = counts.flat().filter(v => v !== null);
   const max = mode === 'regularity' ? 100 : Math.max(mode === 'ratio' ? 0 : 1, ...vals);
@@ -4335,6 +4452,7 @@ function renderChart() {
     const keyOf = (it) => it.row[m.brand] || '\u2014';
     const shared = sharedMoments(items, keyOf);
     chartRole = (it) => shared.roles.get(momentKey(it, keyOf)) || null;
+    chartMoments = shared;
   }
   const heatMode = reachKey ? (reachKey === '__vpu' ? 'ratio' : 'sum')
     : textTm && s.chartType !== 'bars' ? 'level'
@@ -4411,7 +4529,7 @@ function renderChart() {
     const k = `${brandCol ? it.row[brandCol] : 'Updates'}|${bucketOf(it.minutes)}`;
     textRows.set(k, [...(textRows.get(k) || []), it]);
   });
-  const textAt = (name, i) => textValue(textTm, textRows.get(`${name}|${i}`) || []);
+  const textAt = (name, i) => textTm.cell ? textTm.cell(name, hours[i], hours[i] + 60) : textValue(textTm, textRows.get(`${name}|${i}`) || []);
   if (s.chartType === 'heatmap') {
     renderHeatmap(view, { names, hours, items, bucketOf, brandCol, absolute, localOf, isLocalMidnight, fixedH, weight, measureLabel, mode: heatMode, cell: reachKey ? reachAt : heatMode === 'level' ? textAt : null, icons: !!(brandCol || reachKey) });
     return;
@@ -4461,7 +4579,7 @@ function renderChart() {
     series.forEach(se => {
       se.points = hours.map((_, i) => textAt(se.name, i));
       se.counts = se.points.map(v => v || 0);
-      se.total = textValue(textTm, items.filter(it => se.test(it))) || 0;
+      se.total = (textTm.cell ? textTm.cell(se.name, -Infinity, Infinity) : textValue(textTm, items.filter(it => se.test(it)))) || 0;
     });
   } else {
     items.forEach(it => {
@@ -4782,7 +4900,7 @@ function buildCard(item, geo, ctx) {
 
   const lines = +s.titleLines || 0;
   const titleStyle = lines ? ` style="-webkit-line-clamp:${lines}"` : '';
-  const bodyText = s.showBody && m.body ? clipText(String(r[m.body] ?? '').trim(), 450) : '';
+  const bodyText = s.showBody && m.body ? clipText(bodyOnly(r), 450) : '';
   const linkedUrl = m.link ? String(r[m.link] ?? '').trim() : '';
   const hasLink = isHttpUrl(linkedUrl);
   const linkKind = hasLink ? linkInfo(r).cls : '';
@@ -4803,7 +4921,7 @@ function buildCard(item, geo, ctx) {
       <div class="card-chips">${liveblog && !ctx.onlyLiveblogs ? '<span class="live-chip">LIVE</span>' : ''}${mediaChips}${linkChip}<span class="time-chip">${timeLabelTxt}</span></div>
     </div>
     ${imgSrc ? `<img class="card-image" src="${escAttr(imgSrc)}" alt="">` : ''}
-    <div class="m3-title${lines ? ' clamp' : ''}"${titleStyle}>${esc(m.title ? r[m.title] : '')}</div>
+    <div class="m3-title${lines ? ' clamp' : ''}"${titleStyle}>${esc(m.title ? headOf(r) : '')}</div>
     ${bodyText ? `<div class="m3-body">${esc(bodyText)}</div>` : ''}
     ${stats ? `<div class="stats-container">${stats}</div>` : ''}`;
 
@@ -5342,7 +5460,7 @@ function exportCsv() {
     const links = rowLinks(r);
     return [
       title, r.liveblog_titel || d?.label || '', d?.sourceUrl || (m.articleUrl ? r[m.articleUrl] : '') || '', r.update_nummer || '',
-      timeInputLabel(it.minutes), m.title ? r[m.title] : '', m.body ? r[m.body] || '' : '',
+      timeInputLabel(it.minutes), m.title ? headOf(r) : '', m.body ? bodyOnly(r) : '',
       words, lengthClass(words), (sl => sl.length ? Math.round(10 * sl.reduce((a, b) => a + b, 0) / sl.length) / 10 : null)(sentenceLengths(r)),
       mediaCategory(r, m.image) || 'geen',
       m.image && isHttpUrl(r[m.image]) ? r[m.image] : '', isVideoRow(r) ? 'ja' : '', socialOf(r), isDatavizRow(r) ? 'ja' : '',
@@ -5489,7 +5607,7 @@ function renderTable() {
   const groups = [...groupMap].map(([key, list]) => ({ key, items: list }));
   const counts = [`${groups.length} titel${groups.length === 1 ? '' : 's'}`, `${items.length} posts`];
   const axis = TABLE_AXES[s.tableShow] ? s.tableShow : 'speed';
-  setSlideHead(s.view === 'table' ? TABLE_AXES[axis].title : 'Liveblogs in cijfers', [periodText(start, end), ...counts]);
+  setSlideHead(s.view === 'table' ? axisTitle(axis) : `${itemNoun(items)} in cijfers`, [periodText(start, end), ...counts]);
 
   const fixedH = STAT_FORMAT_H;
   const ready = !!(m.time && groups.length);
@@ -5599,12 +5717,12 @@ function renderTable() {
     { key: 'external', label: 'Met uitgaande link', fmt: fmtPct, better: null },
     { key: 'firstShare', label: 'Als eerste bij gedeeld nieuws', fmt: fmtPct, better: 'high' },
     { key: 'coverShare', label: 'Gedeeld nieuws gebracht', fmt: fmtPct, better: 'high' },
-    { key: 'medianLag', label: 'Achterstand als volger', fmt: fmtDur, better: 'low' },
+    { key: 'lag', label: 'Achterstand (mediaan)', fmt: fmtDur, better: 'low' },
     { key: 'headQuote', label: 'Citaat in de kop', fmt: fmtPct, better: null },
     { key: 'statements', label: 'Zinnen met een uitspraak', fmt: fmtPct, better: null },
     { key: 'sourced', label: 'Met bronvermelding', fmt: fmtPct, better: 'high' },
     { key: 'urgency', label: 'Urgentietaal (per 1.000 woorden)', fmt: fmtDec, better: null },
-    { key: 'ownAngle', label: 'Eigen land of Europa (per 1.000 woorden)', fmt: fmtDec, better: null }
+    { key: 'ownAngle', label: 'Eigen land (per 1.000 woorden)', fmt: fmtDec, better: null }
   ];
   // cijfers per titel: totaal, gemiddelde en mediaan per artikel
   state.metrics.filter(mt => mt.column).forEach(mt => {
@@ -5631,7 +5749,8 @@ function renderTable() {
     Object.assign(r.stats, {
       firstShare: ok ? p.first / shared.moments : null,
       coverShare: ok ? (p.first + p.follow) / shared.moments : null,
-      medianLag: ok ? medianOf(p.lags) : null
+      // snelheid los van dekking: mediaan over de momenten die de titel bracht
+      lag: ok ? medianOf(shared.list.filter(mo => mo.who.has(r.label)).map(mo => mo.who.get(r.label))) : null
     });
   });
   // bereik per titel binnen hetzelfde venster
@@ -5702,10 +5821,10 @@ function renderTable() {
     image: 'Aandeel met foto', video: 'Aandeel met video', social: 'Aandeel met social embed', dataviz: 'Aandeel met datavisualisatie',
     media: 'Aandeel met media', link: 'Aandeel met eigen link', premium: 'Aandeel met premium-link',
     external: 'Aandeel met uitgaande link',
-    firstShare: 'Als eerste bij gedeeld nieuws', coverShare: 'Gedeeld nieuws gebracht', medianLag: 'Achterstand als volger (mediaan)',
+    firstShare: 'Als eerste bij gedeeld nieuws', coverShare: 'Gedeeld nieuws gebracht', lag: 'Achterstand bij gebracht nieuws (mediaan)',
     headQuote: 'Aandeel koppen met citaat',
     statements: 'Aandeel zinnen met een uitspraak', sourced: 'Aandeel posts met bronvermelding',
-    urgency: 'Urgentietaal per 1.000 woorden', ownAngle: 'Eigen land of Europa per 1.000 woorden',
+    urgency: 'Urgentietaal per 1.000 woorden', ownAngle: 'Eigen land per 1.000 woorden',
     reachViews: 'Weergaven', reachUsers: 'Gebruikers', reachVpu: 'Weergaven per gebruiker', viewsPerPost: 'Weergaven per update'
   };
   const chartTitleOf = (c) => CHART_TITLES[c.key] || c.chartTitle;
@@ -5737,7 +5856,7 @@ function renderTable() {
     $('#scatterY').innerHTML = opts;
     $('#scatterX').value = xKey || '';
     $('#scatterY').value = yKey || '';
-    setSlideHead('Liveblogs vergeleken', [periodText(start, end), ...counts]);
+    setSlideHead(`${itemNoun(items)} vergeleken`, [periodText(start, end), ...counts]);
     $('#previewInfo').textContent = `${groups.length} titel${groups.length === 1 ? '' : 's'} in spreidingsdiagram`;
     const headH = $('#slideHead').hidden ? 0 : $('#slideHead').offsetHeight;
     const H = Math.max(320, fixedH - PAD_TOP - PAD_BOTTOM - headH - 24);
@@ -5759,7 +5878,7 @@ function renderTable() {
     const charts = [spec(show), ...(show2 ? [spec(show2)] : [])];
     // één grafiek: titel en uitleg bovenaan de slide; twee grafieken: elk een eigen kop met uitleg
     // vaste kop met periode en aantallen; elke grafiek houdt zijn eigen paneeltitel
-    setSlideHead('Liveblogs vergeleken', [periodText(start, end), ...counts]);
+    setSlideHead(`${itemNoun(items)} vergeleken`, [periodText(start, end), ...counts]);
     $('#previewInfo').textContent = `${groups.length} titel${groups.length === 1 ? '' : 's'} in grafiek`;
     const headH = $('#slideHead').hidden ? 0 : $('#slideHead').offsetHeight;
     const H = Math.max(320, fixedH - PAD_TOP - PAD_BOTTOM - headH - 24);
@@ -5780,8 +5899,8 @@ function renderTable() {
     n: 'Posts', perHour: 'Frequentie', regularity: 'Regelmaat', maxGap: 'Langste stilte',
     medianWords: 'Woorden', noText: 'Zonder tekst', image: 'Foto', video: 'Video', social: 'Social', dataviz: 'Visualisatie',
     link: 'Eigen link', premium: 'Premium-link', external: 'Uitgaand',
-    firstShare: 'Als eerste', coverShare: 'Gebracht', medianLag: 'Achterstand', headQuote: 'Citaatkop',
-    statements: 'Uitspraken', sourced: 'Bron', urgency: 'Urgentie', ownAngle: 'Eigen hoek'
+    firstShare: 'Als eerste', coverShare: 'Gebracht', lag: 'Achterstand', headQuote: 'Citaatkop',
+    statements: 'Uitspraken', sourced: 'Bron', urgency: 'Urgentie', ownAngle: 'Eigen land'
   };
   const headOf = (c) => {
     const metric = c.key.match(/^m_(.+)_(sum|avg|med)$/);
@@ -5816,12 +5935,13 @@ function renderTable() {
 
 // grafiekkleuren: rustige M3-tonen i.p.v. merkkleuren (de favicon in de legenda koppelt kleur aan titel)
 const TABLE_AXES = {
-  speed: { label: 'Snelheid en ritme', title: 'Snelheid en ritme per liveblog',
-    keys: ['n', 'perHour', 'regularity', 'maxGap', 'firstShare', 'coverShare', 'medianLag'] },
-  form: { label: 'Vorm', title: 'Vorm van de liveblogs', keys: ['medianWords', 'noText', 'media', 'image', 'video', 'social', 'dataviz'] },
-  content: { label: 'Inhoud', title: 'Inhoud van de liveblogs',
+  speed: { label: 'Snelheid en ritme', title: () => 'Snelheid en ritme per titel',
+    keys: ['n', 'perHour', 'regularity', 'maxGap', 'firstShare', 'coverShare', 'lag'] },
+  form: { label: 'Vorm', title: (noun) => `Vorm van de ${noun}`, keys: ['medianWords', 'noText', 'media', 'image', 'video', 'social', 'dataviz'] },
+  content: { label: 'Inhoud', title: (noun) => `Inhoud van de ${noun}`,
     keys: ['sourced', 'statements', 'headQuote', 'urgency', 'ownAngle', 'link', 'premium', 'external'] }
 };
+const axisTitle = (axis) => TABLE_AXES[axis].title(itemNoun().toLowerCase());
 const STACK_AXIS = { 'stack-length': 'form', 'stack-media': 'form', 'stack-links': 'content' };
 // volgorde binnen een as: gestapelde grafiek eerst, dan de kengetallen zoals in de tabel
 const axisRank = (k) => {
@@ -6041,6 +6161,7 @@ function syncControls() {
   $('#optShowBody').checked = s.showBody;
   $('#titleLines').value = String(s.titleLines);
   $('#slideTitle').value = s.slideTitle;
+  $('#itemKind').value = s.itemKind || '';
 
   const activeRows = getActiveRows();
   $('#refreshRow').hidden = !(extensionBridge && state.datasets.some(d => d.sourceUrl));
@@ -6164,6 +6285,7 @@ function bind() {
   bindSetting('#optShowBody', 'showBody');
   bindSetting('#titleLines', 'titleLines', v => +v);
   bindSetting('#slideTitle', 'slideTitle', v => v, true);
+  bindSetting('#itemKind', 'itemKind', v => v, true);
   bindSetting('#cardStyle', 'cardStyle');
   $$('.view-btn[data-view]').forEach(btn => btn.addEventListener('click', () => {
     state.settings.view = btn.dataset.view;
