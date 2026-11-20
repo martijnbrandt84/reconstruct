@@ -1894,14 +1894,58 @@ function reachTitle(code) {
   return (key && names.find(n => canonicalBrandKey(n) === key)) || code;
 }
 
-function reachRows() {
-  // titels met een liveblog/tabel volgen de schakelaar van die dataset; titels zonder eigen dataset blijven zichtbaar
+/** Totaalcijfers per liveblog: alleen een titel en getallen, zonder tijd (bijv. weergaven en gebruikers over de hele liveblog). */
+function totalsFromTable(headers, rows) {
+  const title = headers.find(h => /brand|merk|titel|title|site/i.test(h) && !/per/i.test(h));
+  if (!title || headers.some(h => /^(hour|uur|kwartier|tijd|tijdstip|time|timestamp|datum|date)\b/i.test(h.trim()))) return null;
+  const cols = headers.filter(h => h !== title);
+  const sample = rows.slice(0, 50);
+  if (!cols.length || !cols.every(h => sample.every(r => r[h] === '' || parseNumber(r[h]) !== null))) return null;
+  const named = rows.filter(r => r[title]);
+  if (!named.length || named.length > 50 || new Set(named.map(r => r[title])).size !== named.length) return null;
+  return { cols, rows: named.map(r => ({ title: r[title], values: Object.fromEntries(cols.map(h => [h, parseNumber(r[h])])) })) };
+}
+
+const reachTotalKind = (h) => /weergave.*per.*gebruiker|views.*per.*user/i.test(h) ? 'vpu' : /per/i.test(h) ? null : /weergave|pageview|views/i.test(h) ? 'views' : /gebruiker|users|bezoeker/i.test(h) ? 'users' : null;
+
+/** Eigen kolommen uit totaalcijfers (alles behalve weergaven en gebruikers), met een veilige sleutel per kolom. */
+function reachTotalCols() {
+  const seen = new Map();
+  (state.datasets || []).filter(d => d.kind === 'reach' && d.active && d.totals).forEach(d => d.totals.cols.forEach(h => {
+    if (!reachTotalKind(h) && !seen.has(h)) seen.set(h, { header: h, key: `ext_${h.replace(/\W+/g, '_')}` });
+  }));
+  return [...seen.values()];
+}
+
+/** Totaalcijfers per titel, gekoppeld aan de liveblogtitels. */
+function reachTotals() {
+  const out = new Map();
+  (state.datasets || []).filter(d => d.kind === 'reach' && d.active && d.totals).forEach(d => d.totals.rows.forEach(r => {
+    const title = reachTitle(r.title);
+    if (!reachTitleVisible(title)) return;
+    const cur = out.get(title) || { views: null, users: null, other: {} };
+    Object.entries(r.values).forEach(([h, v]) => {
+      const kind = reachTotalKind(h);
+      if (kind === 'vpu') return;
+      if (kind) cur[kind] = v; else cur.other[h] = v;
+    });
+    out.set(title, cur);
+  }));
+  return out;
+}
+
+// titels met een liveblog/tabel volgen de schakelaar van die dataset; titels zonder eigen dataset blijven zichtbaar
+function reachTitleVisible(title) {
   const col = state.mapping.brand;
   const all = new Set(col ? state.rows.map(r => r[col]).filter(Boolean) : []);
   const active = new Set(col ? getActiveRows().map(r => r[col]).filter(Boolean) : []);
+  return !all.has(title) || active.has(title);
+}
+
+function reachRows() {
   return (state.datasets || []).filter(d => d.kind === 'reach' && d.active).flatMap(d => d.reach || [])
     .map(r => ({ ...r, title: reachTitle(r.title) }))
-    .filter(r => !all.has(r.title) || active.has(r.title));
+    .filter(r => reachTitleVisible(r.title));
 }
 
 /* ---------- DPG-liveblogs: alle posts via de eigen liveblog-API van de site (via de extensie, met de cookies van de gebruiker) ---------- */
@@ -2314,7 +2358,7 @@ function renderDatasetTabs() {
     const dsTitle = brandCol ? state.rows.find(r => r.__datasetId === d.id && r[brandCol])?.[brandCol] : '';
     const kindIcon = d.kind === 'liveblog' ? 'dynamic_feed' : d.kind === 'reach' ? 'monitoring' : 'table';
     const kindMeta = d.kind === 'liveblog' ? `Liveblog \u00b7 ${d.rowCount} posts`
-      : d.kind === 'reach' ? `Bereik per uur \u00b7 ${d.rowCount} rijen` : `Tabel \u00b7 ${d.rowCount} rijen`;
+      : d.kind === 'reach' ? (d.totals ? `Totaalcijfers per titel \u00b7 ${d.rowCount} rijen` : `Bereik per uur \u00b7 ${d.rowCount} rijen`) : `Tabel \u00b7 ${d.rowCount} rijen`;
     row.innerHTML = `
       ${titleIconHtml(dsTitle, 'dataset-icon') || `<span class="ms dataset-kind">${kindIcon}</span>`}
       <div class="dataset-main">
@@ -2454,6 +2498,13 @@ function loadData(text, silent, opts = {}) {
     if (!silent) toast(`Bereikdata toegevoegd: ${new Set(reach.map(r => r.title)).size} titels. Te zien in de grafiek per uur en de vergelijking.`);
     return;
   }
+  const totals = reach ? null : totalsFromTable(headers, rows);
+  if (totals) {
+    state.datasets.push({ id: crypto.randomUUID(), label: makeUniqueDatasetLabel('Totaalcijfers'), kind: 'reach', rowCount: totals.rows.length, active: true, totals });
+    renderAll();
+    if (!silent) toast(`Totaalcijfers toegevoegd: ${totals.rows.length} titels. Te zien in de vergelijking en het spreidingsdiagram.`);
+    return;
+  }
   state.raw = text;
   const n = appendDataset(rows, headers, { label: 'Data', kind: 'table' });
   if (!n) {
@@ -2532,8 +2583,11 @@ function parseNumber(v) {
     if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.');
     else s = s.replace(/,/g, '');
   } else if (lastComma > -1) {
+    const parts = s.split(',');
     const dec = s.length - lastComma - 1;
-    s = (dec === 3 && s.split(',').length === 2 && s[0] !== '0') ? s.replace(',', '') : s.replace(',', '.');
+    // 1,298,332: meerdere komma's met steeds drie cijfers erna zijn altijd duizendtallen
+    const thousands = parts.length > 2 ? parts.slice(1).every(p => p.length === 3) : (dec === 3 && s[0] !== '0');
+    s = thousands ? s.replace(/,/g, '') : s.replace(',', '.');
   } else if (lastDot > -1) {
     const dec = s.length - lastDot - 1;
     if (dec === 3 && s.split('.').length >= 2) s = s.replace(/\./g, '');
@@ -3949,8 +4003,8 @@ const EXPLAIN = {
   sourced: 'Aandeel posts dat een persbureau noemt of een bron opvoert (volgens, meldt, laat weten); fotobijschriften en ondertekening tellen niet mee',
   urgency: 'Woorden als zojuist, spannend, cruciaal en op het spel, per 1.000 woorden; alledaagse woorden als nu en momenteel tellen niet mee',
   ownAngle: 'Nederland, Den Haag en Haagse voor Nederlandse titels; België, Belgische, Vlaanderen en Vlaamse voor Belgische titels, per 1.000 woorden',
-  reachViews: 'Weergaven van de liveblog, opgeteld over de uren',
-  reachUsers: 'Gebruikers per uur, opgeteld; geen unieke gebruikers',
+  reachViews: 'Weergaven van de liveblog: opgeteld over de uren, of het totaal uit de totaalcijfers',
+  reachUsers: 'Gebruikers: per uur opgeteld (geen unieke gebruikers), of het totaal uit de totaalcijfers',
   reachVpu: 'Weergaven gedeeld door gebruikers',
   viewsPerPost: 'Weergaven gedeeld door het aantal posts',
   'stack-links': 'Eigen premium-artikel, eigen gratis artikel of uitgaande link; per post de eerste die van toepassing is',
@@ -5383,25 +5437,32 @@ function renderTable() {
       lag: ok ? medianOf(shared.list.filter(mo => mo.who.has(r.label)).map(mo => mo.who.get(r.label))) : null
     });
   });
-  // bereik per titel binnen hetzelfde venster
+  // bereik per titel binnen hetzelfde venster; zonder uurdata de totaalcijfers (dan niet aan een periode gebonden)
   const reachIn = reachRows().filter(r => r.t >= start && inEnd(r.t));
+  const totals = reachTotals(), totalCols = reachTotalCols();
+  const wholePeriod = !s.periodFrom && !s.periodTo;
   rowsData.forEach(r => {
     const list = reachIn.filter(x => x.title === r.title);
     const sum = (k) => list.some(x => x[k] !== null) ? list.reduce((a, x) => a + (x[k] || 0), 0) : null;
-    const views = sum('views'), users = sum('users');
+    let views = sum('views'), users = sum('users');
+    const tot = totals.get(r.title);
+    const hourly = views !== null || users !== null;
+    if (!hourly && tot) { views = tot.views; users = tot.users; }
     Object.assign(r.stats, {
       reachViews: views,
       reachUsers: users,
       reachVpu: views !== null && users ? views / users : null,
-      viewsPerPost: views !== null && r.stats.n ? views / r.stats.n : null
+      viewsPerPost: views !== null && r.stats.n && (hourly || wholePeriod) ? views / r.stats.n : null
     });
+    totalCols.forEach(c => { r.stats[c.key] = tot?.other[c.header] ?? null; });
   });
   const fmtBig = (v) => v === null ? '\u2013' : sig3(v);
   COLS.push(
-    { key: 'reachViews', label: 'Weergaven', fmt: fmtBig, better: 'high' },
-    { key: 'reachUsers', label: 'Gebruikers', fmt: fmtBig, better: 'high' },
-    { key: 'reachVpu', label: 'Weergaven per gebruiker', fmt: fmtBig, better: 'high' },
-    { key: 'viewsPerPost', label: 'Weergaven per update', fmt: fmtBig, better: 'high' }
+    { key: 'reachViews', label: 'Weergaven', fmt: fmtBig, better: 'high', reach: true },
+    { key: 'reachUsers', label: 'Gebruikers', fmt: fmtBig, better: 'high', reach: true },
+    { key: 'reachVpu', label: 'Weergaven per gebruiker', fmt: fmtBig, better: 'high', reach: true },
+    { key: 'viewsPerPost', label: 'Weergaven per update', fmt: fmtBig, better: 'high', reach: true },
+    ...totalCols.map(c => ({ key: c.key, label: c.header, chartTitle: c.header, fmt: fmtBig, better: 'high', reach: true }))
   );
   const cols = COLS.filter(c => rowsData.some(r => r.stats[c.key] !== null));
   compareExport = {
@@ -5603,8 +5664,7 @@ function compareChartHtml(rowsInput, stack, col, title) {
     ? stack.parts.reduce((sum, [k]) => sum + (r.stats[stack.key][k] || 0), 0)
     : (r.stats[col.key] ?? 0);
   // volgorde zoals de tabel: meeste updates eerst; bij bereikdata alleen de titels waarvoor die data bestaat
-  const REACH_COLS = ['reachViews', 'reachUsers', 'reachVpu', 'viewsPerPost'];
-  const rowsData = col && REACH_COLS.includes(col.key) ? rowsInput.filter(r => r.stats[col.key] !== null) : rowsInput;
+  const rowsData = col?.reach ? rowsInput.filter(r => r.stats[col.key] !== null) : rowsInput;
   const values = rowsData.map(valueOf);
   const maxVal = Math.max(...values, 0) || 1;
   const raw = maxVal / 5;
