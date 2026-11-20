@@ -299,6 +299,10 @@ const socialOf = (r) => {
 const isLinkPremiumRow = (r) => !!state.mapping.linkPremium && !NEGATIVE.test(String(r[state.mapping.linkPremium] ?? '').trim());
 const isDatavizRow = (r) => !!state.mapping.dataviz && !NEGATIVE.test(String(r[state.mapping.dataviz] ?? '').trim());
 
+// korte link- en nieuwsdomeinen die bij dezelfde site horen als het domein van de liveblog
+const SITE_ALIASES = { 'vrtnws.be': 'vrt.be', 'rtlnieuws.nl': 'rtl.nl' };
+const siteKey = (host) => { const d = String(host || '').toLowerCase().split('.').slice(-2).join('.'); return SITE_ALIASES[d] || d; };
+
 /** Links van een post: naar de eigen site (zelfde domein als de liveblog) of uitgaand. Zonder liveblog-URL tellen alle links als eigen.
  *  cls is één rubriek per post: eigen premium gaat voor eigen gratis, eigen gratis voor uitgaand. */
 function linkInfo(r) {
@@ -306,7 +310,7 @@ function linkInfo(r) {
   if (!m.link) return { cls: '', own: false, external: false };
   const links = m.link === 'artikel_link' ? rowLinks(r) : [String(r[m.link] ?? '').trim()].filter(isHttpUrl);
   if (!links.length) return { cls: '', own: false, external: false };
-  const siteOf = (u) => hostFromUrl(u).toLowerCase().split('.').slice(-2).join('.');
+  const siteOf = (u) => siteKey(hostFromUrl(u));
   const ownSite = m.articleUrl && isHttpUrl(r[m.articleUrl]) ? siteOf(r[m.articleUrl]) : '';
   const own = ownSite ? links.filter(u => siteOf(u) === ownSite) : links;
   const external = links.length > own.length;
@@ -371,7 +375,7 @@ function mediaColumns(media) {
   };
 }
 
-const EXTRA_LIVEBLOG_HEADERS = ['artikel_link', 'artikel_links', 'link_premium', 'video', 'video_still', 'social', 'dataviz', 'woorden', 'blokken', 'embed_bronnen'];
+const EXTRA_LIVEBLOG_HEADERS = ['artikel_link', 'artikel_links', 'link_premium', 'video', 'video_still', 'social', 'dataviz', 'woorden', 'blokken', 'embed_bronnen', 'update_opmaak'];
 
 /** URL's van iframes en scripts in een embed (ook als src zonder https: of ge-escaped in JSON staat). */
 const embedUrls = (html) => [...String(html || '').matchAll(/(?:src|data-src|url)\\?["']?\s*[=:]\s*\\?["']((?:https?:)?\/\/[^"'\\\s>]+)/gi)].map(mm => mm[1]);
@@ -405,6 +409,37 @@ const withExtraHeaders = (headers) => [...headers, ...EXTRA_LIVEBLOG_HEADERS.fil
 const wordCount = (...texts) => String(texts.filter(Boolean).join(' ')).split(/\s+/).filter(w => /\w/.test(w)).length;
 // volledige tekst van een post; alleen de kaart kort hem in
 const fullText = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+/** Tekst van een post met alinea's (lege regel ertussen) en links als [tekst](url); leeg als er geen alinea's of links in zitten. */
+function richText(html, baseUrl = '') {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  doc.querySelectorAll('script, style, noscript, svg').forEach(x => x.remove());
+  const absolute = (u) => { try { return new URL(u, baseUrl || undefined).href; } catch { return ''; } };
+  const BLOCK = /^(P|DIV|H[1-6]|LI|UL|OL|BLOCKQUOTE|SECTION|ARTICLE|FIGURE|TABLE|TR)$/;
+  const paras = [];
+  let cur = '';
+  const flush = () => { const t = cur.replace(/\s+/g, ' ').trim(); if (t) paras.push(t); cur = ''; };
+  const walk = (n) => {
+    if (n.nodeType === 3) { cur += n.nodeValue; return; }
+    if (n.nodeType !== 1) return;
+    if (n.tagName === 'BR') { flush(); return; }
+    if (n.tagName === 'A') {
+      const text = (n.textContent || '').replace(/\s+/g, ' ');
+      const label = text.trim().replace(/[\[\]]/g, '');
+      const href = absolute(n.getAttribute('href'));
+      if (isHttpUrl(href) && label) cur += `${/^\s/.test(text) ? ' ' : ''}[${label}](${href.replace(/\)/g, '%29')})${/\s$/.test(text) ? ' ' : ''}`;
+      else cur += text;
+      return;
+    }
+    const block = BLOCK.test(n.tagName);
+    if (block) flush();
+    n.childNodes.forEach(walk);
+    if (block) flush();
+  };
+  walk(doc.body);
+  flush();
+  return paras.length > 1 || paras.some(p => p.includes('](')) ? paras.join('\n\n') : '';
+}
 
 /* ---------- premium-status van gelinkte artikelen (via de extensie, met cache) ---------- */
 // v3: DPG-premium via shortId; oude uitkomsten opnieuw laten controleren
@@ -1012,6 +1047,18 @@ function tryParseLiveblogHtml(text) {
     if (key.length < 20) return null;
     return textBlocks.find(x => x.text.startsWith(key) || key.startsWith(x.text.slice(0, 60)))?.el || null;
   };
+  // NU.nl: de vastgezette samenvatting (lijstje) staat boven de kop 'Liveblog' en is zelf geen post
+  const liveHeading = doc.querySelector('.heading--liveblog');
+  const belowHeading = (el) => !!(liveHeading.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const isPinnedSummary = (u) => {
+    if (!liveHeading) return false;
+    const first = String(u?.articleBody || '').split(/\r?\n/).map(normText).find(Boolean) || '';
+    if (first.length < 15) return false;
+    const above = textBlocks.some(x => !belowHeading(x.el) && x.text.startsWith(first));
+    const below = textBlocks.some(x => belowHeading(x.el) && x.text.includes(first));
+    return above && !below;
+  };
+  const pinned = new Set(updatesRaw.filter(isPinnedSummary));
   const hits = updatesRaw.map(u => blockFor(stripHtmlTags(u?.articleBody || ''), stripHtmlTags(u?.headline || '')));
   const hitSet = new Set(hits.filter(Boolean));
   // zo hoog mogelijk in de boom, zolang er geen tekst van een andere update in het blok komt
@@ -1034,6 +1081,7 @@ function tryParseLiveblogHtml(text) {
     .filter(h => isArticleLink(h, canonicalUrl));
 
   const rows = updatesRaw.map((u, idx) => {
+    if (pinned.has(u)) return null;
     const box = containers[idx];
     const shared = asArray(u?.sharedContent);
     const media = mediaFromHtml([
@@ -1076,6 +1124,7 @@ function tryParseLiveblogHtml(text) {
       afbeelding: imageUrl,
       liveblog_titel: liveTitle,
       update_tekst: fullText(body),
+      update_opmaak: richText(u?.articleBody, canonicalUrl),
       ...linkFields(
         articleLinksFromContent(u?.articleBody, canonicalUrl),
         shared.map(sc => sc?.url).filter(x => isArticleLink(x, canonicalUrl)),
@@ -1084,7 +1133,7 @@ function tryParseLiveblogHtml(text) {
       woorden: String(wordCount(updateHeadline, body)),
       ...mediaColumns(media)
     };
-  }).filter(r => parseTime(r.tijd) !== null);
+  }).filter(r => r && parseTime(r.tijd) !== null);
 
   // JSON-LD bevat alleen de nieuwste updates; via de extensie opengeklapte oudere posts staan alleen in de DOM
   // sommige sites tonen alleen hele minuten, dus op minuut vergelijken
@@ -1173,6 +1222,7 @@ function tryParseVrtLiveblog(text) {
       afbeelding: image || media.still,
       liveblog_titel: liveTitle,
       update_tekst: fullText(body),
+      update_opmaak: richText(`${textHtml}<p>${esc(quotes)}</p>`, canonicalUrl),
       ...linkFields(articleLinksFromContent(textHtml, canonicalUrl), teaserLinks.filter(u => isArticleLink(u, canonicalUrl))),
       woorden: String(wordCount(title, body)),
       ...mediaColumns(media)
@@ -1461,6 +1511,7 @@ function timepathEventToRow(ev, sourceBrand, liveTitle, canonicalUrl) {
     afbeelding: isHttpUrl(imageUrl) ? imageUrl : media.still,
     liveblog_titel: liveTitle,
     update_tekst: body,
+    update_opmaak: richText(ev?.body, canonicalUrl),
     ...linkFields(articleLinksFromContent(ev?.body, canonicalUrl)),
     woorden: String(wordCount(stripHtmlTags(ev?.title || ''), stripHtmlTags(ev?.body || ''))),
     ...mediaColumns(media)
@@ -1828,7 +1879,7 @@ function replaceDatasetRows(datasetId, rowsInput, headersInput, keepOld = true) 
   // tijden komen soms met en soms zonder milliseconden binnen; op minuut en kop vergelijken
   const keyOf = (r) => `${Math.round(parseTime(r.tijd) ?? 0)}|${String(r.titel || '').trim()}`;
   const previous = new Map(state.rows.filter(r => r.__datasetId === datasetId).map(r => [keyOf(r), r]));
-  const KEEP = ['afbeelding', 'artikel_link', 'artikel_links', 'link_premium', 'video', 'video_still', 'social', 'dataviz', 'woorden'];
+  const KEEP = ['afbeelding', 'artikel_link', 'artikel_links', 'link_premium', 'video', 'video_still', 'social', 'dataviz', 'woorden', 'update_opmaak'];
   const fresh = rowsInput.map(r => {
     const o = { __datasetId: datasetId };
     headers.forEach(h => { o[h] = String(r[h] ?? '').trim(); });
@@ -2068,7 +2119,7 @@ async function fetchDpgLiveblogRows(info, doc) {
     const media = mediaFromHtml(html);
     if (it.video) media.video = true;
     // eigen widget van de site (bv. AD-kaart, HLN-tool op valley.hln.be) in een FREE_HTML-blok: interactieve graphic; linkblokken uitgezonderd
-    const siteOf = (h) => String(h || '').split('.').slice(-2).join('.');
+    const siteOf = siteKey;
     const ownSite = siteOf(hostFromUrl(info.canonical));
     const ownWidget = embedUrls(it.extraHtml).some(u => {
       // De Morgen /specials/embeds/ (visual generator) maakt ook citaat- en linkblokken: niet zonder meer als grafiek tellen
@@ -2092,6 +2143,7 @@ async function fetchDpgLiveblogRows(info, doc) {
       afbeelding: it.image || media.still,
       liveblog_titel: liveTitle,
       update_tekst: fullText(body),
+      update_opmaak: richText(it.paragraphs.map(p => `<p>${p}</p>`).join(''), info.canonical),
       ...linkFields(textLinks, it.teaser?.link ? [it.teaser.link] : []),
       link_premium: premium ? 'ja' : '',
       // soorten blokken en hosts van embeds, om onbekende widgets (bv. grafieken) te kunnen herkennen
@@ -2201,6 +2253,7 @@ async function fetchTickarooLiveblogRows(info, doc) {
       afbeelding: image || media.still,
       liveblog_titel: liveTitle,
       update_tekst: fullText(body),
+      update_opmaak: richText(richHtml, canonicalUrl),
       ...linkFields(articleLinksFromContent(richHtml, canonicalUrl), embedUrls.filter(u => isArticleLink(u, canonicalUrl))),
       woorden: String(wordCount(headline, body)),
       ...mediaColumns(media)
@@ -3625,6 +3678,7 @@ function renderTimeline() {
     if (state.settings.view === 'chart') renderChart();
     else if (['table', 'compare', 'scatter'].includes(state.settings.view)) renderTable();
     else renderTimelineInner();
+    syncSelection();
   } catch (err) {
     console.error('renderTimeline crashed:', err);
     const track = $('#timelineTrack');
@@ -4561,6 +4615,7 @@ function buildCard(item, geo, ctx) {
   const card = document.createElement('div');
   card.className = 'm3-card style-' + (s.cardStyle || 'modern') + (premium ? ' premium' : '') + (liveblog ? ' liveblog' : '');
   card.dataset.minute = String(item.minutes);
+  card.dataset.rid = String(r.__id);
   if (hasArticleUrl) card.classList.add('has-link');
   card.style.setProperty('--cs', geo.scale.toFixed(2));
   card.style.setProperty('--brand-color', color);
@@ -4625,23 +4680,297 @@ function buildCard(item, geo, ctx) {
     renderTimeline(); save();
   });
 
-  if (hasArticleUrl) {
-    card.title = 'Open artikel';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'link');
-    card.addEventListener('click', (ev) => {
-      if (ev.target.closest('.card-delete') || ev.target.closest('.link-chip')) return;
-      window.open(articleUrl, '_blank', 'noopener,noreferrer');
-    });
-    card.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Enter' && ev.key !== ' ') return;
-      if (ev.target.closest('.link-chip')) return;
-      ev.preventDefault();
-      window.open(articleUrl, '_blank', 'noopener,noreferrer');
-    });
-  }
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.addEventListener('click', (ev) => {
+    if (ev.target.closest('.card-delete') || ev.target.closest('.link-chip')) return;
+    selectPost(r.__id);
+  });
+  card.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    if (ev.target.closest('.link-chip')) return;
+    ev.preventDefault();
+    selectPost(r.__id);
+  });
 
   return card;
+}
+
+/* ============================================================
+   Gekoppeld nieuws: tegel kiezen, rest dimmen, zijpaneel
+   ============================================================ */
+let selectedPostId = null;
+const postKeyOf = (it) => state.mapping.brand ? (it.row[state.mapping.brand] || '\u2014') : '\u2014';
+const isTimelineView = () => !['chart', 'table', 'compare', 'scatter'].includes(state.settings.view);
+
+/** Alle posts met een tijdstip, ook verwijderde en verborgen: in het paneel zijn gekoppelde posts altijd te zien. */
+function allPostItems() {
+  const m = state.mapping;
+  if (!m.time) return [];
+  return getActiveRows()
+    .map(r => ({ row: r, minutes: parseTime(r[m.time]) }))
+    .filter(it => it.minutes !== null)
+    .sort((a, b) => a.minutes - b.minutes);
+}
+
+/** Naar de vorige (-1) of volgende (1) post van dezelfde titel op de tijdlijn. */
+function stepSelection(dir) {
+  const items = allPostItems();
+  const cur = items.find(it => String(it.row.__id) === String(selectedPostId));
+  if (!cur) return;
+  const shown = new Set($$('.m3-card', $('#cardLayer')).map(el => el.dataset.rid));
+  const key = postKeyOf(cur);
+  const sibs = items.filter(it => postKeyOf(it) === key && shown.has(String(it.row.__id)));
+  const next = sibs[sibs.findIndex(it => it.row === cur.row) + dir];
+  if (next) selectPost(next.row.__id, { scroll: true });
+}
+
+function selectPost(id, { scroll = false } = {}) {
+  selectedPostId = id === null || String(id) === String(selectedPostId) ? null : String(id);
+  syncSelection(scroll);
+}
+
+function whenLabel(min) {
+  if (!isAbsoluteMinutes(min)) return timeLabel(min);
+  const day = new Intl.DateTimeFormat('nl-NL', { timeZone: NEWS_TZ, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(min * 60000));
+  return `${day} ${timeLabel(min)}`;
+}
+
+const shortUrl = (u, n = 52) => clipText(String(u).replace(/^https?:\/\/(www\.)?/i, ''), n);
+const photoOf = (row) => state.mapping.image && isHttpUrl(row[state.mapping.image]) ? String(row[state.mapping.image]).trim() : '';
+const photoSrc = (url) => imageFor(url) || (needsImageProxy(url) ? toProxyImageUrl(url) : url);
+const msIcon = (icon, label) => `<span class="ms" title="${escAttr(label)}">${icon}</span>`;
+
+/** Links van een post met soort: eigen artikel, eigen premium-artikel of uitgaand. */
+function postLinks(row) {
+  const m = state.mapping;
+  const raw = m.link
+    ? (m.link === 'artikel_link' ? rowLinks(row) : [String(row[m.link] ?? '').trim()])
+    : String(row['Links'] ?? row.artikel_links ?? '').split(/\s+/);
+  const urls = [...new Set(raw.filter(isHttpUrl))];
+  const base = m.articleUrl ? String(row[m.articleUrl] ?? '').trim() : '';
+  const ownSite = isHttpUrl(base) ? siteKey(hostFromUrl(base)) : '';
+  const isOwn = (u) => !ownSite || siteKey(hostFromUrl(u)) === ownSite;
+  const ownCount = urls.filter(isOwn).length;
+  return urls.map(url => {
+    if (!isOwn(url)) return { url, kind: 'external' };
+    const premium = linkMeta[url]?.premium === true || (isLinkPremiumRow(row) && ownCount === 1);
+    return { url, kind: premium ? 'premium' : 'own' };
+  });
+}
+const LINK_KIND = {
+  own: ['link', 'Eigen artikel'],
+  premium: ['lock', 'Eigen premium-artikel'],
+  external: ['open_in_new', 'Uitgaande link']
+};
+
+/** Verrijkingen van een post als icoon met uitleg: beeld, embeds en links. */
+function postEnrichments(row, links = postLinks(row)) {
+  const m = state.mapping, out = [];
+  if (photoOf(row)) out.push(['image', 'Foto']);
+  if (isVideoRow(row)) out.push(['play_circle', 'Video']);
+  const social = socialOf(row);
+  if (social) out.push(['alternate_email', `Social embed: ${social}`]);
+  if (isDatavizRow(row)) out.push(['bar_chart', 'Datavisualisatie']);
+  ['own', 'premium', 'external'].forEach(k => {
+    const n = links.filter(l => l.kind === k).length;
+    if (n) out.push([LINK_KIND[k][0], `${LINK_KIND[k][1]}${n > 1 ? ` (${n}×)` : ''}`]);
+  });
+  if (!links.some(l => l.kind === 'premium') && m.premium && isPremium(row[m.premium])) out.push(['workspace_premium', 'Premium']);
+  return out;
+}
+
+/** Waarom een post niet op de tijdlijn staat; leeg als hij er wel op staat. */
+function offTimeline(row, viewIds) {
+  const m = state.mapping;
+  if (state.removed.includes(row.__id)) return 'verwijderd uit de tijdlijn';
+  if (m.brand && state.hiddenTitles.includes(row[m.brand])) return 'titel verborgen';
+  return viewIds.has(String(row.__id)) ? '' : 'buiten het getoonde tijdvenster';
+}
+
+/** Pil zoals de tijdchip op de tijdlijntegels; cls: accent (primair), hard (bijna kopie), lg (groter). */
+const pill = (html, cls = '', title = '') => `<span class="dp-pill${cls ? ' ' + cls : ''}"${title ? ` title="${escAttr(title)}"` : ''}>${html}</span>`;
+const iconPill = (icon, label, withLabel = false, cls = '') => pill(`<span class="ms">${icon}</span>${withLabel ? esc(label) : ''}`, cls, label);
+const COPY_LABEL = {
+  near: ['bijna kopie', 'hard', 'Zoveel procent van de woorden staat in dezelfde volgorde in beide posts'],
+  short: ['ingekorte kopie', 'hard', 'Zoveel procent van de woorden van de kortste post staat in dezelfde volgorde in de andere post'],
+  part: ['deels gelijk', '', 'Overlap in woordreeksen van 3 woorden']
+};
+const copyBadge = (m) => {
+  if (!m) return '';
+  const [label, cls, tip] = COPY_LABEL[m.kind];
+  return pill(`${label} ${Math.round(m.s * 100)}%`, cls, tip);
+};
+
+/** Een post in een lijst in het paneel: merk links, tijd en verschil rechts, daaronder kop, tekst en verrijkingen. */
+function postEntryHtml(row, minutes, { lag = '', badge = '', foot = '' }, viewIds) {
+  const m = state.mapping;
+  const key = m.brand ? String(row[m.brand] ?? '') : '';
+  const why = offTimeline(row, viewIds);
+  const icons = postEnrichments(row).map(([ic, lb]) => iconPill(ic, lb)).join('');
+  return `<button type="button" class="dp-item${why ? ' off' : ''}" data-id="${escAttr(row.__id)}">
+    <span class="dp-item-top">${titleIconHtml(key, 'dp-icon')}<b>${esc(key)}</b><span class="dp-pills">${pill(esc(whenLabel(minutes)))}${lag}</span></span>
+    <span class="dp-item-head">${esc(headOf(row))}</span>
+    <span class="dp-item-body">${esc(clipText(bodyOnly(row), 200))}</span>
+    <span class="dp-item-foot">${icons}${badge}<small>${[foot, why].filter(Boolean).map(esc).join(' \u00b7 ')}</small></span>
+  </button>`;
+}
+
+/** Alle maten van een post: de cijfers uit de data en de tekstmaten van de app. */
+function postMetrics(item, all) {
+  const row = item.row, m = state.mapping;
+  const yn = (v) => v ? 'ja' : 'nee';
+  const rows = state.metrics.filter(mt => mt.column).map(mt =>
+    [mt.label || mt.column, formatValue(row[mt.column], mt.format, { roundWhole: isCountMetric(mt.column, mt.label || mt.column) })]);
+  const lens = sentenceLengths(row);
+  const sentences = splitSentences(sentenceBody(row));
+  const text = rowText(row);
+  const count = (re) => (text.match(re) || []).length;
+  const key = postKeyOf(item);
+  const prev = all.filter(o => o !== item && o.minutes <= item.minutes && postKeyOf(o) === key).pop();
+  rows.push(
+    ['Woorden (kop en tekst)', allWords(row)],
+    ['Lengte', LENGTH_CLASSES.find(c => c[0] === lengthClass(postWords(row)))[1]],
+    ['Zinnen', lens.length || '\u2013'],
+    ['Woorden per zin', lens.length ? (lens.reduce((a, b) => a + b, 0) / lens.length).toFixed(1).replace('.', ',') : '\u2013'],
+    ['Kop met citaat', yn(QUOTE_RE.test(rowHead(row)))],
+    ['Zinnen met een uitspraak', sentences.length ? `${sentences.filter(s => QUOTE_RE.test(s) || SPEECH_RE.test(s)).length} van ${sentences.length}` : '\u2013'],
+    ['Bronvermelding', yn(AGENCY_RE.test(stripCredits(text)) || ATTRIB_RE.test(stripCredits(text)))],
+    ['Urgentietaal (woorden)', count(URGENCY_RE)],
+    ['Eigen land (woorden)', count(ownAngleRe(row))],
+    ['Minuten sinds vorige post van de titel', prev ? relLabel(item.minutes - prev.minutes, false).replace(/^\+/, '') : '\u2013']
+  );
+  return rows;
+}
+
+/** Bijna-kopieën buiten de groep: bij andere titels (horen bij het nieuws) en bij dezelfde titel (herhaling). */
+function copiesOf(item, all, group) {
+  const key = postKeyOf(item);
+  const inGroup = new Set(group ? group.posts.map(p => String(p.id)) : []);
+  const found = nearCopies(item, all).filter(c => !inGroup.has(String(c.o.row.__id)));
+  return { others: found.filter(c => postKeyOf(c.o) !== key), same: found.filter(c => postKeyOf(c.o) === key) };
+}
+
+const RICH_LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+
+/** De tekst van een post als alinea's met links in de tekst; null als de opmaak ontbreekt of niet bij de getoonde tekst past. */
+function richBody(row, body) {
+  const rich = String(row.update_opmaak ?? '').trim();
+  if (!rich || !body) return null;
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\d]+/gu, '');
+  const target = norm(body);
+  const paras = rich.split(/\n{2,}/);
+  for (let i = 0; i < Math.min(paras.length, 4); i++) {
+    const shown = paras.slice(i);
+    if (norm(shown.map(p => p.replace(RICH_LINK, '$1')).join(' ')) !== target) continue;
+    const urls = new Set();
+    shown.forEach(p => [...p.matchAll(RICH_LINK)].forEach(m => { urls.add(m[2]); urls.add(m[2].replace(/%29/g, ')')); }));
+    const html = shown.map(p => `<p>${esc(p).replace(RICH_LINK, (_, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`)}</p>`).join('');
+    return { html, urls };
+  }
+  return null;
+}
+
+function detailHtml(item, group, all, viewIds) {
+  const row = item.row, m = state.mapping;
+  const brandName = m.brand ? String(row[m.brand] ?? '') : '';
+  const articleUrl = m.articleUrl ? String(row[m.articleUrl] ?? '').trim() : '';
+  const me = group?.posts.find(p => p.id === row.__id);
+  const role = !me ? '' : me.lag === 0 ? 'Eerste' : relLabel(me.lag, true);
+  const body = bodyOnly(row);
+  const rich = richBody(row, body);
+  const photo = photoOf(row);
+  const links = postLinks(row);
+  const why = offTimeline(row, viewIds);
+  const skip = new Set([m.title, m.body, 'update_opmaak'].filter(Boolean));
+  const raw = Object.entries(row)
+    .filter(([k, v]) => !k.startsWith('__') && !skip.has(k) && String(v ?? '').trim() !== '')
+    .map(([k, v]) => {
+      const parts = String(v).trim().split(/\s+/);
+      const val = parts.every(isHttpUrl)
+        ? parts.map(u => `<a href="${escAttr(u)}" target="_blank" rel="noopener noreferrer">${esc(shortUrl(u))}</a>`).join('<br>')
+        : esc(clipText(v, 300));
+      return `<dt>${esc(k)}</dt><dd>${val}</dd>`;
+    }).join('');
+
+  const related = group ? group.posts.filter(p => p.id !== row.__id) : [];
+  const { others, same } = copiesOf(item, all, group);
+  const entries = [
+    ...related.map(p => ({ row: p.row, minutes: p.minutes,
+      lag: pill(p.lag === 0 ? 'eerste' : esc(relLabel(p.lag, true)), 'accent'), badge: copyBadge(copyMatch(row, p.row)), foot: `gelijkenis ${Math.round(p.sim * 100)}%` })),
+    ...others.map(c => ({ row: c.o.row, minutes: c.o.minutes, badge: copyBadge(c), foot: `${relLabel(c.o.minutes - item.minutes, true)} t.o.v. deze post` }))
+  ].sort((x, y) => x.minutes - y.minutes);
+  const relatedInfo = `Posts van andere titels over hetzelfde nieuws, ook als ze niet op de tijdlijn staan. Gekoppeld op tekstgelijkenis binnen ${group ? Math.round(group.window / 60) : 3} uur, of als kopie binnen 24 uur: 80% of meer dezelfde woorden in dezelfde volgorde (bijna kopie), de kortste post staat voor 80% of meer in de andere (ingekorte kopie), of 50% of meer dezelfde woordreeksen van 3 woorden (deels gelijk). De achterstand is gemeten vanaf de eerste post van de groep.`;
+  const relatedNote = entries.length ? '' : '<p class="dp-note">Geen vergelijkbare post van een andere titel gevonden. Dat kan ook liggen aan een korte post of een post zonder tekst.</p>';
+  const relatedList = entries.map(e => postEntryHtml(e.row, e.minutes, e, viewIds)).join('');
+  const sameHtml = same.length
+    ? `<section class="dp-sec"><h4 class="dp-sec-head">Herhaald in dezelfde titel<small>${same.length}</small></h4><div class="dp-list">`
+      + same.map(c => postEntryHtml(c.o.row, c.o.minutes, { badge: copyBadge(c), foot: `${relLabel(c.o.minutes - item.minutes, true)} t.o.v. deze post` }, viewIds)).join('')
+      + '</div></section>'
+    : '';
+
+  const metrics = postMetrics(item, all).map(([k, v]) => `<div class="dp-stat"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
+
+  const loose = rich ? links.filter(l => !rich.urls.has(l.url)) : links;
+  const chips = postEnrichments(row, links).map(([ic, lb]) => iconPill(ic, lb, true, 'lg')).join('')
+    || '<span class="dp-note">Geen foto, video, embed of link</span>';
+  return `
+    <header class="dp-top">
+      ${brandName ? titleIconHtml(brandName, 'dp-logo') : ''}
+      <div class="dp-who"><b>${esc(brandName || 'Post')}</b></div>
+      ${pill(esc(whenLabel(item.minutes)))}
+      <button type="button" class="icon-btn" id="dpClose" title="Sluiten (Esc)"><span class="ms">close</span></button>
+    </header>
+    <div class="dp-body">
+      ${why ? `<p class="dp-warn"><span class="ms">info</span>Deze post staat niet in de tijdlijn: ${esc(why)}.</p>` : ''}
+      <article class="dp-msg">
+        ${role ? pill(esc(role), 'accent') : ''}
+        <h3 class="dp-title">${esc(headOf(row))}</h3>
+        ${photo ? `<img class="dp-photo" src="${escAttr(photoSrc(photo))}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">` : ''}
+        ${body ? `<div class="dp-text">${rich ? rich.html : esc(body)}</div>` : ''}
+        <div class="dp-chips">${chips}</div>
+        ${loose.length ? `<ul class="dp-links">${loose.map(l => `<li>${msIcon(LINK_KIND[l.kind][0], LINK_KIND[l.kind][1])}<a href="${escAttr(l.url)}" target="_blank" rel="noopener noreferrer">${esc(shortUrl(l.url, 46))}</a><small>${LINK_KIND[l.kind][1]}</small></li>`).join('')}</ul>` : ''}
+        ${isHttpUrl(articleUrl) ? `<a class="btn tonal" href="${escAttr(articleUrl)}" target="_blank" rel="noopener noreferrer"><span class="ms">open_in_new</span>Open liveblog</a>` : ''}
+      </article>
+      <section class="dp-sec"><h4 class="dp-sec-head">Kenmerken van deze post</h4><dl class="dp-stats">${metrics}</dl></section>
+      <section class="dp-sec"><h4 class="dp-sec-head">Hetzelfde nieuws bij andere titels<span class="ms dp-info" title="${escAttr(relatedInfo)}">info</span><small>${entries.length}</small></h4>${relatedNote}<div class="dp-list">${relatedList}</div></section>
+      ${sameHtml}
+      <details class="dp-sec dp-raw"><summary class="dp-sec-head">Alle gegevens uit de data</summary><dl class="dp-meta">${raw}</dl></details>
+    </div>`;
+}
+
+/** Zet selectie, dimming en zijpaneel gelijk met selectedPostId; ook na elke nieuwe tekening. */
+function syncSelection(scroll = false) {
+  const panel = $('#detailPanel');
+  const layer = $('#cardLayer');
+  const cards = $$('.m3-card', layer);
+  const rid = selectedPostId === null ? null : String(selectedPostId);
+  const all = isTimelineView() && rid !== null ? allPostItems() : [];
+  const item = all.find(it => String(it.row.__id) === rid);
+  if (!item) selectedPostId = null;
+  const wasOpen = !panel.hidden;
+
+  if (item) {
+    const group = sharedMoments(all, postKeyOf).byId.get(item.row.__id) || null;
+    const ids = new Set([rid, ...(group ? group.posts.map(p => String(p.id)) : []), ...copiesOf(item, all, group).others.map(c => String(c.o.row.__id))]);
+    cards.forEach(el => {
+      el.classList.toggle('selected', el.dataset.rid === rid);
+      el.classList.toggle('related', el.dataset.rid !== rid && ids.has(el.dataset.rid));
+      el.classList.toggle('dim', !ids.has(el.dataset.rid));
+    });
+    const keepTop = panel.dataset.rid === rid ? $('.dp-body', panel)?.scrollTop || 0 : 0;
+    panel.innerHTML = detailHtml(item, group, all, new Set(cards.map(el => el.dataset.rid)));
+    panel.dataset.rid = rid;
+    $('.dp-body', panel).scrollTop = keepTop;
+    $('#dpClose', panel).addEventListener('click', () => selectPost(null));
+    $$('.dp-item[data-id]', panel).forEach(b => b.addEventListener('click', () => selectPost(b.dataset.id, { scroll: true })));
+  } else {
+    cards.forEach(el => el.classList.remove('selected', 'related', 'dim'));
+  }
+  layer.classList.toggle('has-selection', !!item);
+  panel.hidden = !item;
+  if (wasOpen === panel.hidden) applyZoom();
+  if (item && scroll) cards.find(el => el.dataset.rid === rid)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 /* ============================================================
@@ -5997,6 +6326,18 @@ function bind() {
   $('#btnZoomOut').addEventListener('click', () => { zoom = Math.max(.1, (zoom ?? fitScale()) - .1); applyZoom(); });
   $('#btnZoomFit').addEventListener('click', () => { zoom = null; applyZoom(); });
   window.addEventListener('resize', applyZoom);
+  $('#cardLayer').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) selectPost(null); });
+  document.addEventListener('keydown', (ev) => {
+    const tgt = ev.target instanceof Element ? ev.target : document.body;
+    if (selectedPostId === null || tgt.closest('input, textarea, select, [contenteditable]')) return;
+    if (ev.key === 'Escape') { selectPost(null); return; }
+    const dir = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[ev.key];
+    // in het paneel blijven op en neer gewoon scrollen
+    if (!dir || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+    if (tgt.closest('.dp-body, summary') && /^Arrow(Up|Down)$/.test(ev.key)) return;
+    ev.preventDefault();
+    stepSelection(dir);
+  });
 
   $('#btnExportCsv').addEventListener('click', exportCsv);
 

@@ -228,6 +228,7 @@ function sharedMoments(items, keyOf, thr = 0.25, windowMin = 180, mergeMin = 0.2
   const per = new Map();
   const roles = new Map();
   const moments_ = [];
+  const byId = new Map();
   const slot = (k) => per.get(k) || per.set(k, { first: 0, follow: 0, lags: [] }).get(k);
   let moments = 0;
   members.forEach(idx => {
@@ -245,9 +246,14 @@ function sharedMoments(items, keyOf, thr = 0.25, windowMin = 180, mergeMin = 0.2
       who.set(keys[k], list[k].minutes - t0);
       roles.set(momentKey(list[k], keyOf), { first: false, lag: list[k].minutes - t0 });
     });
-    moments_.push({ start: t0, first: keys[idx[0]], who });
+    // gelijkenis van elke post met de rest van het moment, voor het zijpaneel
+    const avgSim = (k) => idx.filter(x => x !== k).reduce((a, x) => a + sim(k, x), 0) / (idx.length - 1);
+    const posts = idx.map(k => ({ id: list[k].row.__id, row: list[k].row, key: keys[k], minutes: list[k].minutes, lag: list[k].minutes - t0, sim: avgSim(k) }));
+    const mo = { start: t0, first: keys[idx[0]], who, posts, window: windowMin };
+    moments_.push(mo);
+    posts.forEach(p => byId.set(p.id, mo));
   });
-  momentsCache = { key: cacheKey, value: { moments, per, roles, list: moments_, window: windowMin } };
+  momentsCache = { key: cacheKey, value: { moments, per, roles, list: moments_, byId, window: windowMin } };
   return momentsCache.value;
 }
 // sleutel per post, ook als visibleItems() nieuwe objecten maakt
@@ -278,3 +284,56 @@ const medianOf = (arr) => {
   const a = [...arr].sort((x, y) => x - y), mid = a.length >> 1;
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 };
+
+/* ---------- bijna-kopieën: dezelfde woorden in dezelfde volgorde ---------- */
+// near: samen 80% of meer dezelfde woorden in dezelfde volgorde (langste gemeenschappelijke woordreeks), ook met kleine wijzigingen
+// short: de kortste post staat voor 80% of meer in de langere (ingekorte kopie); part: 50% of meer dezelfde woordreeksen van 3 woorden
+const COPY_NEAR = 0.8, COPY_PARTLY = 0.5, COPY_SHORT_MIN_WORDS = 20, COPY_SHORT_MIN_RATIO = 0.4;
+const gramCache = new WeakMap();
+function textGrams(r) {
+  const key = `${state.mapping.title}|${state.mapping.body}`;
+  const hit = gramCache.get(r);
+  if (hit && hit.key === key) return hit;
+  const toks = fullPostText(r).toLowerCase().match(/[\p{L}\d]+/gu) || [];
+  let set = null;
+  if (toks.length >= 6) {
+    set = new Set();
+    for (let i = 0; i + 3 <= toks.length; i++) set.add(toks.slice(i, i + 3).join(' '));
+  }
+  const val = { key, toks, set };
+  gramCache.set(r, val);
+  return val;
+}
+function lcsLength(a, b) {
+  let prev = new Uint16Array(b.length + 1), cur = new Uint16Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) cur[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    [prev, cur] = [cur, prev];
+  }
+  return prev[b.length];
+}
+/** Overlap van twee posts als { s: 0-1, kind: 'near' | 'short' | 'part' }, of null bij te weinig tekst (minder dan 6 woorden) of te weinig overlap. */
+function copyMatch(a, b) {
+  const A = textGrams(a), B = textGrams(b);
+  if (!A.set || !B.set) return null;
+  const [small, large] = A.set.size <= B.set.size ? [A.set, B.set] : [B.set, A.set];
+  let inter = 0;
+  small.forEach(s => { if (large.has(s)) inter++; });
+  if (inter / small.size < 0.2) return null;
+  const jac = inter / (A.set.size + B.set.size - inter);
+  const nA = A.toks.length, nB = B.toks.length, nMin = Math.min(nA, nB), nMax = Math.max(nA, nB);
+  const l = lcsLength(A.toks, B.toks);
+  const dice = 2 * l / (nA + nB);
+  if (dice >= COPY_NEAR) return { s: dice, kind: 'near' };
+  if (nMin >= COPY_SHORT_MIN_WORDS && nMin / nMax >= COPY_SHORT_MIN_RATIO && l / nMin >= COPY_NEAR) return { s: l / nMin, kind: 'short' };
+  if (jac >= COPY_PARTLY) return { s: jac, kind: 'part' };
+  return null;
+}
+/** Posts uit `all` binnen `windowMin` minuten met minstens `minScore` overlap met `item`, sterkste eerst. */
+function nearCopies(item, all, minScore = COPY_PARTLY, windowMin = 1440) {
+  return all
+    .filter(o => o.row !== item.row && Math.abs(o.minutes - item.minutes) <= windowMin)
+    .map(o => ({ o, ...copyMatch(item.row, o.row) }))
+    .filter(x => x.s !== undefined && x.s >= minScore)
+    .sort((x, y) => y.s - x.s);
+}
