@@ -3675,7 +3675,11 @@ function renderTimeline() {
   try {
     if (state.settings.autoFit) autoRange();
     updateRangeControls();
-    if (state.settings.view === 'chart') renderChart();
+    const live = state.settings.view === 'live';
+    $('#stage').classList.toggle('is-live', live);
+    if (!live && document.body.classList.contains('wall')) toggleWall(false);
+    if (live) renderLiveBoard();
+    else if (state.settings.view === 'chart') renderChart();
     else if (['table', 'compare', 'scatter'].includes(state.settings.view)) renderTable();
     else renderTimelineInner();
     syncSelection();
@@ -4630,11 +4634,11 @@ function buildCard(item, geo, ctx) {
     ? `<img class="brand-logo" src="${logo}" data-fallbacks="${escAttr(logoBackups)}" data-brand-text="${escAttr(brandName || '')}" onerror="onBrandLogoError(this)" alt="${escAttr(brandName)}" style="--ls:${LOGO_SCALE[logoScaleKey] || 1};--lr:${ratio}">`
     : (brandName ? `<span class="brand-text">${esc(brandName)}</span>` : '');
 
-  const timeLabelTxt = s.relative ? relLabel(item.minutes - ctx.base, true) : timeLabel(item.minutes);
+  const timeLabelTxt = s.relative && !ctx.live ? relLabel(item.minutes - ctx.base, true) : timeLabel(item.minutes);
 
-  const imgSrc = s.showImage && m.image ? imageFor(r[m.image]) : null;
+  const imgSrc = !ctx.compact && s.showImage && m.image ? imageFor(r[m.image]) : null;
 
-  const stats = state.metrics.filter(mt => mt.column).map(mt => {
+  const stats = ctx.compact ? '' : state.metrics.filter(mt => mt.column).map(mt => {
     const n = parseNumber(r[mt.column]);
     const best = n !== null && ctx.maxByMetric.get(mt.id) === n;
     const roundWhole = isCountMetric(mt.column, mt.label || mt.column);
@@ -4645,9 +4649,9 @@ function buildCard(item, geo, ctx) {
     </div>`;
   }).join('');
 
-  const lines = +s.titleLines || 0;
+  const lines = ctx.titleLines ?? (+s.titleLines || 0);
   const titleStyle = lines ? ` style="-webkit-line-clamp:${lines}"` : '';
-  const bodyText = s.showBody && m.body ? clipText(bodyOnly(r), 450) : '';
+  const bodyText = !ctx.compact && s.showBody && m.body ? clipText(bodyOnly(r), 450) : '';
   const linkedUrl = m.link ? String(r[m.link] ?? '').trim() : '';
   const hasLink = isHttpUrl(linkedUrl);
   const linkKind = hasLink ? linkInfo(r).cls : '';
@@ -4664,7 +4668,7 @@ function buildCard(item, geo, ctx) {
   card.innerHTML = `
     <button class="card-delete" title="Tegel verwijderen">&times;</button>
     <div class="card-header">
-      <div class="card-brand">${logoHtml}</div>
+      <div class="card-brand">${logoHtml}${ctx.brandName && logo && brandName ? `<span class="brand-name">${esc(brandName)}</span>` : ''}</div>
       <div class="card-chips">${liveblog && !ctx.onlyLiveblogs ? '<span class="live-chip">LIVE</span>' : ''}${mediaChips}${linkChip}<span class="time-chip">${timeLabelTxt}</span></div>
     </div>
     ${imgSrc ? `<img class="card-image" src="${escAttr(imgSrc)}" alt="">` : ''}
@@ -4702,6 +4706,8 @@ function buildCard(item, geo, ctx) {
 let selectedPostId = null;
 const postKeyOf = (it) => state.mapping.brand ? (it.row[state.mapping.brand] || '\u2014') : '\u2014';
 const isTimelineView = () => !['chart', 'table', 'compare', 'scatter'].includes(state.settings.view);
+const cardLayerEl = () => $(state.settings.view === 'live' ? '#liveCards' : '#cardLayer');
+const shownCards = () => $$('.m3-card', cardLayerEl());
 
 /** Alle posts met een tijdstip, ook verwijderde en verborgen: in het paneel zijn gekoppelde posts altijd te zien. */
 function allPostItems() {
@@ -4718,10 +4724,11 @@ function stepSelection(dir) {
   const items = allPostItems();
   const cur = items.find(it => String(it.row.__id) === String(selectedPostId));
   if (!cur) return;
-  const shown = new Set($$('.m3-card', $('#cardLayer')).map(el => el.dataset.rid));
+  const shown = new Set(shownCards().map(el => el.dataset.rid));
   const key = postKeyOf(cur);
   const sibs = items.filter(it => postKeyOf(it) === key && shown.has(String(it.row.__id)));
-  const next = sibs[sibs.findIndex(it => it.row === cur.row) + dir];
+  // live staat de nieuwste bovenaan: omhoog is dan later
+  const next = sibs[sibs.findIndex(it => it.row === cur.row) + (state.settings.view === 'live' ? -dir : dir)];
   if (next) selectPost(next.row.__id, { scroll: true });
 }
 
@@ -4942,8 +4949,8 @@ function detailHtml(item, group, all, viewIds) {
 /** Zet selectie, dimming en zijpaneel gelijk met selectedPostId; ook na elke nieuwe tekening. */
 function syncSelection(scroll = false) {
   const panel = $('#detailPanel');
-  const layer = $('#cardLayer');
-  const cards = $$('.m3-card', layer);
+  const layer = cardLayerEl();
+  const cards = shownCards();
   const rid = selectedPostId === null ? null : String(selectedPostId);
   const all = isTimelineView() && rid !== null ? allPostItems() : [];
   const item = all.find(it => String(it.row.__id) === rid);
@@ -4971,6 +4978,262 @@ function syncSelection(scroll = false) {
   panel.hidden = !item;
   if (wasOpen === panel.hidden) applyZoom();
   if (item && scroll) cards.find(el => el.dataset.rid === rid)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+/* ============================================================
+   Live: een eigen bord voor een scherm op de redactie
+   ============================================================ */
+const LIVE_RECENT_MIN = 1440;     // nieuwste post binnen een dag: de klok loopt echt mee
+const LIVE_LANE_MIN = 720;        // een titel houdt zijn baan zolang zijn laatste post niet ouder is dan dit (of het venster)
+const LIVE_NEW_MS = 5 * 60000;    // zo lang houdt een nieuwe post het label Nieuw
+const LIVE_ENTER_MS = 12000;      // duur van de binnenkomst-animatie
+const LIVE_COL_MAX_W = 340, LIVE_COL_MIN_W = 240, LIVE_COL_GAP = 16, LIVE_LANE_GAP = 36, LIVE_ROW_GAP = 14;
+const liveSeen = new Set();
+const liveNewAt = new Map();
+let liveSeeded = false;
+let liveReplay = null;            // oude data: de klok loopt door vanaf de nieuwste post
+let liveBoard = null;             // indeling van de laatste tekening; de klok verschuift die elke seconde
+
+const liveKey = (row) => {
+  const m = state.mapping;
+  return `${row.__datasetId ?? ''}|${Math.round(parseTime(row[m.time]) ?? 0)}|${String(row[m.title] ?? '').trim()}`;
+};
+const windowLabel = (w) => w % 60 ? `${w} min` : w === 60 ? 'uur' : `${w / 60} uur`;
+const clockLabel = (min) => new Intl.DateTimeFormat('nl-NL', { timeZone: NEWS_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(min * 60000));
+const liveAgo = (d) => d < 1 ? 'zojuist' : d < 60 ? `${Math.floor(d)} min geleden` : `${Math.floor(d / 60)} u ${Math.floor(d % 60)} min geleden`;
+
+/** De klok van het bord: nu, of bij oude data een klok die vanaf de nieuwste post doorloopt. */
+function liveClock(all) {
+  const nowReal = Date.now() / 60000;
+  const newest = all.length ? all[all.length - 1].minutes : null;
+  const live = newest !== null && isAbsoluteMinutes(newest) && nowReal - newest <= LIVE_RECENT_MIN;
+  if (live) return { now: Math.max(nowReal, newest), live, newest };
+  if (newest === null) return { now: nowReal, live, newest };
+  if (!liveReplay || liveReplay.at !== newest) liveReplay = { at: newest, real: Date.now() };
+  return { now: newest + (Date.now() - liveReplay.real) / 60000, live, newest };
+}
+
+/** Tegels van posts die sinds de vorige keer zijn binnengekomen krijgen een label en een binnenkomst-animatie. */
+function updateLiveSeen(all) {
+  const keys = all.map(it => liveKey(it.row));
+  if (!liveSeeded) { keys.forEach(k => liveSeen.add(k)); liveSeeded = all.length > 0; }
+  const unseen = keys.filter(k => !liveSeen.has(k));
+  unseen.forEach(k => liveSeen.add(k));
+  // een hele nieuwe dataset in één keer is geen binnenkomst
+  if (unseen.length <= 15) unseen.forEach(k => liveNewAt.set(k, Date.now()));
+}
+const liveSince = (row) => { const at = liveNewAt.get(liveKey(row)); return at ? Date.now() - at : Infinity; };
+
+function markNewCards(all, items, cards) {
+  updateLiveSeen(all);
+  items.forEach((it, i) => {
+    const since = liveSince(it.row);
+    if (since >= LIVE_NEW_MS) return;
+    const el = cards[i];
+    el.classList.add('is-new');
+    $('.card-chips', el)?.insertAdjacentHTML('afterbegin', '<span class="live-chip new-chip">Nieuw</span>');
+    if (since < LIVE_ENTER_MS) { el.classList.add('enter'); el.style.setProperty('--since', `-${since}ms`); }
+  });
+}
+
+function liveBarHtml(clock, win) {
+  const sources = (state.datasets || []).filter(d => d.active && d.sourceUrl);
+  const lastRefresh = Math.max(0, ...sources.map(d => d.refreshedAt || 0));
+  const status = clock.newest === null ? 'Nog geen posts'
+    : !clock.live ? `Replay: de klok loopt door vanaf de laatste post (${whenLabel(clock.newest)})`
+    : !sources.length ? 'Geen liveblog-bron om te verversen'
+    : !extensionBridge ? 'Verversen kan alleen met de Chrome-extensie'
+    : `Elke minuut ververst${lastRefresh ? ` \u00b7 laatst om ${clockLabel(lastRefresh / 60000)}` : ''}`;
+  const wall = document.body.classList.contains('wall');
+  const opts = [15, 30, 60, 120, 180].map(w => `<option value="${w}"${w === win ? ' selected' : ''}>laatste ${windowLabel(w)}</option>`).join('');
+  return `<header class="lv-bar">
+      <span class="lv-state${clock.live ? ' on' : ''}"><span class="lv-dot"></span>${clock.live ? 'Live' : clock.newest === null ? 'Niet live' : 'Replay'}</span>
+      <select id="liveWindow" class="lv-window" aria-label="Venster">${opts}</select>
+      <span class="lv-status">${esc(status)}</span>
+      <button type="button" class="icon-btn" id="btnWall" title="${wall ? 'Muurweergave sluiten' : 'Muurweergave: schermvullend voor een scherm op de redactie'}"><span class="ms">${wall ? 'fullscreen_exit' : 'fullscreen'}</span></button>
+    </header>`;
+}
+
+/** Het bord: een baan per titel over de volle breedte, nu bovenaan en oudere posts naar beneden. */
+function renderLiveBoard() {
+  const host = $('#liveView');
+  const m = state.mapping;
+  const all = visibleItems();
+  const win = +state.settings.liveWindow || 60;
+  const clock = liveClock(all);
+  const laneOf = (it) => (m.brand ? it.row[m.brand] || '\u2014' : '\u2014');
+  const lastBy = new Map(all.map(it => [laneOf(it), it.minutes]));
+  const lanes = [...lastBy.keys()].filter(t => clock.now - lastBy.get(t) <= Math.max(LIVE_LANE_MIN, win));
+  const n = lanes.length;
+
+  host.innerHTML = liveBarHtml(clock, win)
+    + '<div class="lv-board"><div class="lv-corner"><span class="lv-clock"></span></div><div class="lv-heads"></div><div class="lv-axis"></div>'
+    + '<div class="lv-plot" id="liveCards"><div class="lv-lanes"></div><div class="lv-grid"></div></div></div>';
+  liveBoard = null;
+  const plot = $('#liveCards');
+  if (!n || !m.time || !m.title) {
+    const msg = !state.rows.length ? 'Voeg data toe in het Data-blok' : !m.time || !m.title ? 'Kies bij Velden een kolom voor tijdstip en titel' : 'Nog geen posts';
+    plot.insertAdjacentHTML('beforeend', `<p class="lv-none">${msg}</p>`);
+    $('#previewInfo').textContent = '0 tegels';
+    return;
+  }
+  const W = plot.clientWidth, H = plot.clientHeight;
+  if (W < 200 || H < 150) return;
+  const px = H / win;
+
+  // nieuwste eerst; een tegel komt nooit hoger dan zijn eigen tijdstip
+  const order = all.filter(it => it.minutes <= clock.now && it.minutes >= clock.now - win).reverse();
+  const ages = order.map(it => clock.now - it.minutes);
+  const laneIdx = order.map(it => lanes.indexOf(laneOf(it)));
+  const byLane = lanes.map((_, li) => order.map((__, i) => i).filter(i => laneIdx[i] === li));
+
+  const ctx = { base: 0, maxByMetric: new Map(), onlyLiveblogs: true, live: true, titleLines: 3, brandName: true };
+  const cards = order.map(it => {
+    const el = buildCard(it, { scale: 1 }, ctx);
+    el.style.visibility = 'hidden';
+    plot.appendChild(el);
+    return el;
+  });
+  markNewCards(all, order, cards);
+  if (window.lucide) lucide.createIcons();
+
+  // tegels van één titel in `cap` kolommen; alleen als er geen ruimte is schuift een tegel naar beneden
+  const packLane = (idx, cap, heights) => {
+    const bottom = new Array(cap).fill(-Infinity);
+    let shifted = false;
+    const out = idx.map(i => {
+      const want = ages[i] * px;
+      let c = bottom.findIndex(b => b + LIVE_ROW_GAP <= want);
+      let top = want;
+      if (c < 0) { c = bottom.indexOf(Math.min(...bottom)); top = bottom[c] + LIVE_ROW_GAP; shifted = true; }
+      bottom[c] = top + heights[i];
+      return { col: c, top };
+    });
+    return { out, shifted };
+  };
+
+  // C kolommen over de volle breedte; titels die niet passen krijgen er een bij
+  const trial = (C, f) => {
+    const colW = (W - LIVE_LANE_GAP * (n - 1) - LIVE_COL_GAP * (C - n)) / C;
+    const scale = Math.min(1.7, colW / 320) * f;
+    cards.forEach(el => { el.style.width = colW + 'px'; el.style.setProperty('--cs', scale.toFixed(3)); });
+    const heights = cards.map(el => el.offsetHeight);
+    const caps = new Array(n).fill(1);
+    const packs = byLane.map(idx => packLane(idx, 1, heights));
+    for (let free = C - n; free > 0; free--) {
+      let pick = -1;
+      packs.forEach((p, li) => { if (p.shifted && (pick < 0 || byLane[li].length > byLane[pick].length)) pick = li; });
+      // past alles al: de rest van de breedte gaat naar de drukste titel, zodat tegels nooit breder worden
+      if (pick < 0) byLane.forEach((idx, li) => { if (idx.length && (pick < 0 || idx.length / caps[li] > byLane[pick].length / caps[pick])) pick = li; });
+      if (pick < 0) break;
+      caps[pick]++;
+      packs[pick] = packLane(byLane[pick], caps[pick], heights);
+    }
+    return { colW, caps, packs, fits: packs.every(p => !p.shifted) };
+  };
+  // een tegel is nooit breder dan LIVE_COL_MAX_W (zoals in de tijdlijn); past het niet, dan kleinere tekst en meer kolommen
+  const minC = Math.max(n, Math.ceil((W + LIVE_COL_GAP) / (LIVE_COL_MAX_W + LIVE_COL_GAP)));
+  const maxC = Math.max(minC, Math.min(12, Math.floor((W + LIVE_COL_GAP) / (LIVE_COL_MIN_W + LIVE_COL_GAP))));
+  let best;
+  search: for (const f of [1, .9, .8, .7]) {
+    for (let C = minC; C <= maxC; C++) {
+      best = trial(C, f);
+      if (best.fits) break search;
+    }
+  }
+
+  const { colW, caps, packs } = best;
+  const laneX = [];
+  let x = 0;
+  lanes.forEach((_, li) => { laneX.push(x); x += caps[li] * colW + (caps[li] - 1) * LIVE_COL_GAP + LIVE_LANE_GAP; });
+  const laneW = caps.map(c => c * colW + (c - 1) * LIVE_COL_GAP);
+  const placed = [];
+  byLane.forEach((idx, li) => idx.forEach((i, k) => {
+    const { col, top } = packs[li].out[k];
+    cards[i].style.left = (laneX[li] + col * (colW + LIVE_COL_GAP)) + 'px';
+    placed.push({ el: cards[i], real: order[i].minutes, shift: top - ages[i] * px });
+  }));
+
+  $('.lv-lanes').innerHTML = lanes.map((t, li) => `<div class="lv-lane" style="left:${laneX[li]}px;width:${laneW[li]}px">${byLane[li].length ? '' : `<span class="lv-empty">Geen posts in het laatste ${windowLabel(win)}</span>`}</div>`).join('');
+  const heads = $('.lv-heads');
+  heads.style.display = m.brand ? '' : 'none';
+  heads.innerHTML = lanes.map((t, li) => `<div class="lv-head" style="left:${laneX[li]}px;width:${laneW[li]}px"><span class="lv-count" title="Posts in dit venster">${byLane[li].length}</span><span class="lv-last"></span></div>`).join('');
+
+  liveBoard = {
+    plot, axis: $('.lv-axis'), grid: $('.lv-grid'), clockEl: $('.lv-clock'), px, H, win,
+    off: tzOffsetMinutes(NEWS_TZ, clock.now * 60000), now0: clock.now, t0: Date.now(), cards: placed,
+    heads: $$('.lv-head', heads).map((el, li) => ({ el, last: $('.lv-last', el), at: lastBy.get(lanes[li]) }))
+  };
+  $('#previewInfo').textContent = `${order.length} ${order.length === 1 ? 'tegel' : 'tegels'}`;
+  tickLive();
+}
+
+/** Tijdas en rasterlijnen voor het moment `now`; ze schuiven mee met de klok. */
+function drawLiveAxis(b, now) {
+  const step = b.win <= 30 ? 5 : b.win <= 60 ? 10 : b.win <= 120 ? 15 : 30;
+  let ticks = '', lines = '';
+  for (let t = Math.floor((now + b.off) / step) * step - b.off; t >= now - b.win; t -= step) {
+    const y = ((now - t) * b.px).toFixed(1);
+    const hour = Math.round(t + b.off) % 60 === 0;
+    lines += `<div class="lv-line${hour ? ' hour' : ''}" style="top:${y}px"></div>`;
+    if (y > 14 && y < b.H - 8) ticks += `<div class="lv-tick${hour ? ' hour' : ''}" style="top:${y}px">${timeLabel(t)}</div>`;
+  }
+  b.axis.innerHTML = ticks;
+  b.grid.innerHTML = lines;
+}
+
+/** Elke seconde: tegels, as en klok schuiven een stukje mee. */
+function tickLive() {
+  const b = liveBoard;
+  if (!b || state.settings.view !== 'live' || !b.plot.isConnected) return;
+  const now = b.now0 + (Date.now() - b.t0) / 60000;
+  b.cards.forEach(c => {
+    const top = (now - c.real) * b.px + c.shift;
+    c.el.style.top = top.toFixed(1) + 'px';
+    c.el.style.visibility = top >= b.H ? 'hidden' : 'visible';
+  });
+  drawLiveAxis(b, now);
+  b.clockEl.textContent = clockLabel(now);
+  b.heads.forEach(h => {
+    const ago = now - h.at;
+    h.last.textContent = `laatste ${liveAgo(ago)}`;
+    h.el.classList.toggle('fresh', ago < 5);
+  });
+}
+
+function toggleWall(on = !document.body.classList.contains('wall')) {
+  document.body.classList.toggle('wall', on);
+  if (on && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
+  if (!on && document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  if (state.settings.view === 'live') renderTimeline();
+}
+
+function bindLive() {
+  const host = $('#liveView');
+  host.addEventListener('click', (ev) => {
+    if (ev.target.closest('#btnWall')) toggleWall();
+  });
+  host.addEventListener('change', (ev) => {
+    if (ev.target.id !== 'liveWindow') return;
+    state.settings.liveWindow = +ev.target.value;
+    renderTimeline(); save();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && document.body.classList.contains('wall')) toggleWall(false);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && document.body.classList.contains('wall') && !document.fullscreenElement && selectedPostId === null) toggleWall(false);
+  });
+  // de klok loopt elke seconde mee; elke minuut wordt het bord opnieuw ingedeeld en verversen de bronnen
+  setInterval(tickLive, 1000);
+  setInterval(() => { if (state.settings.view === 'live') renderTimeline(); }, 60000);
+  let resizeTimer;
+  new ResizeObserver(() => {
+    if (state.settings.view !== 'live') return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(renderTimeline, 150);
+  }).observe(host);
+  setInterval(() => { if (state.settings.view === 'live' && extensionBridge) refreshAll(true); }, 60000);
 }
 
 /* ============================================================
@@ -6188,12 +6451,12 @@ function syncControls() {
   setDot('#dot2', !!(state.mapping.time && state.mapping.title));
 
   const canExport = !!(state.mapping.time && state.mapping.title && activeRows.length);
-  $('#btnExportPng').disabled = !canExport;
+  $('#btnExportPng').disabled = !canExport || s.view === 'live';
   // video/GIF animeren tegels op de tijdlijn; in grafiek en tabel is alleen een stilstaand beeld zinvol
   const animated = (s.view || 'timeline') === 'timeline';
   $('#btnExportVideo').disabled = !canExport || !animated;
   $('#btnExportGif').disabled = !canExport || !animated;
-  $('#btnCopy').disabled = !canExport;
+  $('#btnCopy').disabled = !canExport || s.view === 'live';
   $('#btnExportCsv').disabled = !canExport && !reachRows().length;
 }
 function setDot(sel, ok) {
@@ -6300,6 +6563,7 @@ function bind() {
     renderAll();
   }));
   bindSetting('#chartColorBy', 'chartColorBy');
+  bindLive();
   bindSetting('#gifSpeed', 'gifSpeed', v => v, true);
   bindSetting('#videoMode', 'videoMode', v => v, true);
 
